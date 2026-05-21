@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   release:
-    # macOS 전용 release. Windows 지원은 v0.2 이후 검토.
     strategy:
       fail-fast: false
       matrix:
@@ -21,6 +20,9 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_suffix: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_suffix: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
 
@@ -55,10 +57,12 @@ jobs:
       - name: Write .env (vite inline)
         # tauri-action 이 sub-process 에 env forwarding 을 일부 누락하는 케이스 우회.
         # vite 가 .env 파일을 직접 읽어 import.meta.env 로 inline 하도록 명시 작성.
+        # shell: bash — windows-latest 기본 셸(PowerShell) 에서 POSIX heredoc/${#VAR}/[ -z ] 깨짐 방지.
         env:
           URL: ${{ secrets.VITE_SUPABASE_URL }}
           KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
           SUCCESS_URL: ${{ secrets.VITE_AUTH_SUCCESS_URL }}
+        shell: bash
         run: |
           echo "URL length: ${#URL}"
           echo "KEY length: ${#KEY}"
@@ -92,6 +96,7 @@ jobs:
             ### 설치
             - macOS (Apple Silicon): `*_aarch64.dmg`
             - macOS (Intel): `*_x64.dmg`
+            - Windows (x64): `*-setup.exe` (SmartScreen: 추가 정보 → 실행) — ⚠️ BETA: 로그인 미검증
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}

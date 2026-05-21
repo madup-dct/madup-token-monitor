@@ -64,6 +64,11 @@ pub fn run() {
 
     tauri::Builder::default()
         // 두 번째 instance가 실행되려 하면 기존 윈도우를 활성화하고 종료한다.
+        // Windows/Linux 딥링크 forwarding: single-instance 의 `deep-link` feature 가
+        // 이 콜백 실행 *전에* `deep_link.handle_cli_arguments(argv)` 를 호출한다.
+        // 그 함수가 `madup-token-monitor://` argv 를 파싱해 `deep-link://new-url` 이벤트를
+        // emit 하면, setup() 의 `on_open_url` 핸들러(아래)가 동일 경로로 받는다.
+        // → argv 를 여기서 수동 파싱할 필요 없음 (auto-forward). macOS 는 RunEvent::Opened 경로.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();
@@ -99,6 +104,11 @@ pub fn run() {
         .setup(|app| {
             tray::setup_tray(app.handle())?;
             tray::spawn_title_updater(app.handle().clone());
+
+            // Windows/Linux 가 런타임에 `madup-token-monitor://` 스킴을 OS 레지스트리에 claim.
+            // macOS 는 Info.plist 로 이미 등록되므로 harmless (register_all 은 idempotent).
+            #[cfg(desktop)]
+            let _ = app.deep_link().register_all();
 
             // OAuth deep-link 콜백을 Rust 측에서 직접 처리해 popover 를 띄운다.
             // JS 측 `onOpenUrl` 도 동일하게 처리하지만:
