@@ -2,7 +2,7 @@
 
 매드업 구성원의 Claude / MCP 토큰 사용량을 로컬에서 추적하고, 선택적으로 팀과 집계하는 데스크톱 앱입니다.
 
-> **현재 macOS 전용입니다.** (Apple Silicon · Intel) Windows 지원은 v0.2 이후 검토합니다.
+> macOS (Apple Silicon · Intel) 및 Windows x64 를 지원합니다. **Windows 빌드는 현재 BETA** — 로그인(딥링크 콜백) 경로가 실기기 미검증 상태입니다.
 
 ## 소개
 
@@ -13,12 +13,15 @@
 
 ## 설치
 
-1. [Releases](https://github.com/madup-dct/madup-token-monitor/releases/latest) 에서 본인 칩에 맞는 dmg 다운로드
+1. [Releases](https://github.com/madup-dct/madup-token-monitor/releases/latest) 에서 본인 플랫폼에 맞는 파일 다운로드
 
    | 플랫폼 | 파일 |
    |--------|------|
    | macOS Apple Silicon (M1/M2/M3+) | `*_aarch64.dmg` |
    | macOS Intel | `*_x64.dmg` |
+   | Windows x64 | `*-setup.exe` |
+
+### macOS — Gatekeeper 경고 회피
 
 2. dmg 마운트 → **Applications** 폴더로 드래그
 3. **첫 실행 전** 터미널에서 한 번 실행 (Apple Developer ID 서명/notarization 미적용으로 인한 Gatekeeper 경고 회피):
@@ -30,6 +33,16 @@
 4. Launchpad 또는 Spotlight 에서 **매드업 토큰 모니터** 실행 → 메뉴바 우측 상단에 아이콘 표시
 
 > 새 버전이 출시되면 앱 안에서 자동 업데이트 알림이 뜹니다. 자동 업데이트로 받은 버전은 quarantine 이 안 붙어서 위 `xattr` 명령을 다시 실행할 필요 없습니다.
+
+### Windows — SmartScreen 경고 회피
+
+사내 도구라 Authenticode 코드서명이 없으므로, Windows Defender SmartScreen 경고가 표시됩니다.
+
+2. `*-setup.exe` 실행 시 "Windows의 PC 보호" 경고창이 나타나면:
+   - **추가 정보(More info)** 클릭 → **실행(Run anyway)** 클릭
+3. 설치 후 트레이(시스템 알림 영역)에 아이콘이 표시됩니다.
+
+> **BETA 안내**: 현재 Windows 빌드는 BETA입니다. Slack 로그인(딥링크 OAuth 콜백) 경로가 실기기 미검증 상태이므로, 로그인이 정상 동작하지 않을 수 있습니다. 문제 발생 시 팀 채널에 알려주세요.
 
 ## Slack 연결
 

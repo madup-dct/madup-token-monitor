@@ -277,4 +277,4 @@ printf '%s' "$VAL" | gh secret set NAME --repo madup-dct/madup-token-monitor
 - 헤더 드래그 (현재 비활성화. 사용자가 다시 원하면 webkit-app-region 또는 NSWindow native fix)
 - DailyBarChart 도 granularity 따라 그룹핑된 막대 표시 (현재는 list 만 적용)
 - Apple Developer ID 서명 / notarization 도입 시 Gatekeeper 안내 제거
-- Windows 지원 (v0.2 이후)
+- Windows 지원 — v0.3.0 에서 빌드/릴리즈 파이프라인 추가 (NSIS + CI matrix). 로그인(딥링크 OAuth 콜백)은 실기기 미검증으로 SOFT/BETA. 동료 실기기 검증 완료 후 BETA 해제.

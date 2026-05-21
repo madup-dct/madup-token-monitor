@@ -16,7 +16,6 @@ on:
 
 jobs:
   build:
-    # macOS 전용 빌드. Windows 지원은 v0.2 이후 검토.
     strategy:
       fail-fast: false
       matrix:
@@ -25,6 +24,8 @@ jobs:
             target: aarch64-apple-darwin
           - os: macos-latest
             target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
 
@@ -55,10 +56,12 @@ jobs:
         run: pnpm install --frozen-lockfile --dangerously-allow-all-builds
 
       - name: Write .env (vite inline)
+        # shell: bash — windows-latest 기본 셸(PowerShell) 에서 POSIX heredoc/${#VAR}/[ -z ] 깨짐 방지.
         env:
           URL: ${{ secrets.VITE_SUPABASE_URL }}
           KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
           SUCCESS_URL: ${{ secrets.VITE_AUTH_SUCCESS_URL }}
+        shell: bash
         run: |
           echo "URL length: ${#URL}"
           echo "KEY length: ${#KEY}"

@@ -407,14 +407,14 @@ export default function Settings() {
             disabled={!IS_TAURI || !autostartReady}
             onChange={handleAutostartChange}
             label="로그인 시 자동 시작"
-            description="macOS 로그인 시 백그라운드로 실행됩니다. 메뉴바 트레이 아이콘에서 창을 다시 띄울 수 있습니다."
+            description="OS 로그인 시 백그라운드로 실행됩니다. 트레이/메뉴바 아이콘에서 창을 다시 띄울 수 있습니다."
           />
           <SwitchRow
             checked={showMenubarCost}
             disabled={!IS_TAURI}
             onChange={handleShowMenubarCostChange}
-            label="메뉴바에 오늘 사용량 표시"
-            description="메뉴바 아이콘 옆에 오늘 사용한 USD 금액이 1분마다 갱신됩니다."
+            label="트레이/메뉴바에 오늘 사용량 표시"
+            description="트레이/메뉴바 아이콘 옆(또는 tooltip)에 오늘 사용한 USD 금액이 1분마다 갱신됩니다."
           />
           <SwitchRow
             checked={notifyOnUpdate}
