@@ -106,9 +106,12 @@ pub fn run() {
             tray::spawn_title_updater(app.handle().clone());
 
             // Windows/Linux 가 런타임에 `madup-token-monitor://` 스킴을 OS 레지스트리에 claim.
-            // macOS 는 Info.plist 로 이미 등록되므로 harmless (register_all 은 idempotent).
-            #[cfg(desktop)]
-            let _ = app.deep_link().register_all();
+            // macOS 는 Info.plist 로 이미 등록되므로 이 경로를 건드리지 않는다 (무회귀).
+            // 등록 실패(권한 등) 시 로그만 남긴다 — 로그인 딥링크가 안 먹는 원인 추적용.
+            #[cfg(not(target_os = "macos"))]
+            if let Err(e) = app.deep_link().register_all() {
+                eprintln!("deep_link register_all failed: {e}");
+            }
 
             // OAuth deep-link 콜백을 Rust 측에서 직접 처리해 popover 를 띄운다.
             // JS 측 `onOpenUrl` 도 동일하게 처리하지만:

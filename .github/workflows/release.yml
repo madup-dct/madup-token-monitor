@@ -12,6 +12,9 @@ jobs:
   release:
     strategy:
       fail-fast: false
+      # max-parallel: 1 — macOS·Windows job 이 동일 draft release 의 latest.json 을
+      # 비원자적으로 read-modify-write 하므로, 직렬 실행해 플랫폼 키 누락(race) 을 차단.
+      max-parallel: 1
       matrix:
         include:
           - os: macos-latest
