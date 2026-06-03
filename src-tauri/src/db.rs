@@ -151,6 +151,7 @@ pub fn range_bounds(range: &str) -> (i64, i64) {
         "today" | "1d" => midnight_ms(today_local),
         "7d" => midnight_ms(today_local - Duration::days(7)),
         "30d" => midnight_ms(today_local - Duration::days(30)),
+        "90d" => midnight_ms(today_local - Duration::days(90)),
         "365d" => midnight_ms(today_local - Duration::days(365)),
         // weekly/monthly 그룹핑이 의미 있는 옵션 리스트 (월/년) 를 만들려면
         // SQLite 의 모든 기록을 모아야 함. local DB 라 양이 제한적.

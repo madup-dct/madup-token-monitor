@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>madup-token-monitor — AWS 아키텍처 다이어그램 (최소 구성)</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #ffffff; color: #232f3e;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard",
+                 "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+    padding: 28px 20px 60px;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; }
+  .eyebrow { text-transform: uppercase; letter-spacing: .14em; font-size: 11px; color: #ec7211; font-weight: 700; margin: 0 0 6px; }
+  h1 { font-size: 24px; margin: 0 0 6px; letter-spacing: -.02em; }
+  .sub { color: #5f6b7a; font-size: 13.5px; margin: 0 0 18px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; margin: 0 0 8px; font-size: 12px; color: #5f6b7a; }
+  .legend .it { display: flex; align-items: center; gap: 6px; }
+  .legend .ln { width: 26px; height: 0; border-top: 2px solid #6b7684; }
+  .legend .ln.dash { border-top-style: dashed; }
+  svg { width: 100%; height: auto; display: block; background: #fff; }
+  text { font-family: -apple-system, "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
+  .lbl { font-size: 12.5px; fill: #232f3e; font-weight: 600; }
+  .lbl2 { font-size: 11px; fill: #5f6b7a; }
+  .group-lbl { font-size: 12px; fill: #687078; font-weight: 700; letter-spacing: .04em; }
+  .edge { font-size: 11px; fill: #4a5560; font-weight: 600; }
+  .conn { fill: none; stroke: #6b7684; stroke-width: 1.7; }
+  .conn.dash { stroke-dasharray: 5 4; stroke: #9aa4b0; }
+  .foot { font-size: 12px; color: #8a94a0; margin-top: 22px; padding-top: 14px; border-top: 1px solid #e6e9ee; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">Infrastructure · Supabase → AWS (minimal · serverless resolver)</p>
+  <h1>madup-token-monitor — AWS 아키텍처 (최소 구성)</h1>
+  <p class="sub">AppSync + Aurora + CloudFront/S3 · Lambda·Cognito 없음 · Slack OIDC 직결 · DB는 private(인바운드 0개방) · 서울 리전</p>
+  <div class="legend">
+    <span class="it"><span class="ln"></span> 요청 / 데이터 흐름</span>
+    <span class="it"><span class="ln dash"></span> 인증 / 정적 콜백</span>
+  </div>
+
+  <svg viewBox="0 0 1240 760" role="img" aria-label="AWS 최소 구성 아키텍처 다이어그램">
+    <defs>
+      <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#6b7684"/>
+      </marker>
+      <marker id="arrowD" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#9aa4b0"/>
+      </marker>
+      <linearGradient id="gBlue"   x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5a7bff"/><stop offset="1" stop-color="#1b1f8a"/></linearGradient>
+      <linearGradient id="gMag"    x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff5fae"/><stop offset="1" stop-color="#c70e5e"/></linearGradient>
+      <linearGradient id="gGreen"  x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9ccb3b"/><stop offset="1" stop-color="#5e8a0f"/></linearGradient>
+      <linearGradient id="gPurple" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a876ff"/><stop offset="1" stop-color="#7129e8"/></linearGradient>
+      <linearGradient id="gSlack"  x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7a2b85"/><stop offset="1" stop-color="#4a154b"/></linearGradient>
+    </defs>
+
+    <!-- ===== boundary boxes ===== -->
+    <!-- AWS Cloud -->
+    <rect x="80" y="330" width="1080" height="400" rx="10" fill="#f7fbff" stroke="#ec7211" stroke-width="1.6"/>
+    <g transform="translate(96,346)">
+      <rect x="0" y="0" width="30" height="22" rx="4" fill="#ec7211"/>
+      <text x="15" y="15" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">aws</text>
+      <text x="40" y="16" class="group-lbl" fill="#ec7211">AWS Cloud · ap-northeast-2</text>
+    </g>
+
+    <!-- VPC -->
+    <rect x="456" y="565" width="328" height="153" rx="8" fill="#eef7ee" stroke="#1aab4e" stroke-width="1.4" stroke-dasharray="6 4"/>
+    <text x="472" y="585" class="group-lbl" fill="#1aab4e">VPC (private subnet) · 인바운드 0개방</text>
+
+    <!-- 외부 영역 라벨 -->
+    <text x="700" y="32" class="group-lbl">외부 (AWS 밖)</text>
+
+    <!-- ===== connectors (under icons) ===== -->
+    <!-- S3 -> CloudFront -->
+    <path class="conn" d="M196,90 L304,90" marker-end="url(#arrow)"/>
+    <!-- CloudFront -> user (auth-callback, dashed) -->
+    <path class="conn dash" d="M340,58 L340,42 L1040,42 L1040,52" marker-end="url(#arrowD)"/>
+    <!-- Slack -> user (OAuth 로그인) -->
+    <path class="conn dash" d="M860,90 L1004,90" marker-end="url(#arrowD)"/>
+    <!-- user -> Internet -->
+    <path class="conn" d="M1040,132 L1040,216" marker-end="url(#arrow)"/>
+    <!-- Internet -> AppSync -->
+    <path class="conn" d="M1040,290 L1040,345 L620,345 L620,391" marker-end="url(#arrow)"/>
+    <!-- Slack -> AppSync (OIDC authorizer, dashed) -->
+    <path class="conn dash" d="M820,128 L820,368 L662,368 L662,391" marker-end="url(#arrowD)"/>
+    <!-- AppSync -> Aurora -->
+    <path class="conn" d="M620,503 L620,596" marker-end="url(#arrow)"/>
+
+    <!-- ===== edge labels ===== -->
+    <g><rect x="222" y="76" width="40" height="18" rx="4" fill="#fff"/><text x="242" y="89" text-anchor="middle" class="edge">정적</text></g>
+    <g><rect x="600" y="33" width="180" height="18" rx="4" fill="#fff"/><text x="690" y="46" text-anchor="middle" class="edge">auth-callback (정적 페이지)</text></g>
+    <g><rect x="876" y="76" width="86" height="18" rx="4" fill="#fff"/><text x="919" y="89" text-anchor="middle" class="edge">OAuth 로그인</text></g>
+    <g><rect x="648" y="336" width="240" height="18" rx="4" fill="#fff"/><text x="768" y="349" text-anchor="middle" class="edge">HTTPS / WSS · Slack OIDC 토큰 첨부</text></g>
+    <g><rect x="666" y="359" width="178" height="18" rx="4" fill="#fff"/><text x="755" y="372" text-anchor="middle" class="edge">OIDC authorizer (JWKS 검증)</text></g>
+    <g><rect x="628" y="540" width="232" height="18" rx="4" fill="#fff"/><text x="744" y="553" text-anchor="middle" class="edge">JS/VTL resolver · RDS Data API</text></g>
+
+    <!-- ===== external nodes ===== -->
+    <!-- S3 -->
+    <g transform="translate(128,58)">
+      <rect width="64" height="64" rx="12" fill="url(#gGreen)"/>
+      <g fill="#fff"><ellipse cx="32" cy="20" rx="15" ry="5"/><path d="M17,20 L20,46 a12,4 0 0 0 24,0 L47,20 a15,5 0 0 1 -30,0 Z" opacity=".95"/></g>
+      <text x="32" y="84" text-anchor="middle" class="lbl">Amazon S3</text>
+      <text x="32" y="100" text-anchor="middle" class="lbl2">정적 호스팅</text>
+    </g>
+    <!-- CloudFront -->
+    <g transform="translate(308,58)">
+      <rect width="64" height="64" rx="12" fill="url(#gPurple)"/>
+      <g fill="none" stroke="#fff" stroke-width="2.2"><circle cx="32" cy="32" r="15"/><ellipse cx="32" cy="32" rx="7" ry="15"/><line x1="17" y1="32" x2="47" y2="32"/></g>
+      <text x="32" y="84" text-anchor="middle" class="lbl">CloudFront</text>
+      <text x="32" y="100" text-anchor="middle" class="lbl2">엣지 캐싱</text>
+    </g>
+    <!-- Slack (외부 OIDC provider) -->
+    <g transform="translate(788,58)">
+      <rect width="64" height="64" rx="12" fill="url(#gSlack)"/>
+      <g fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round">
+        <line x1="25" y1="18" x2="22" y2="46"/><line x1="42" y1="18" x2="39" y2="46"/>
+        <line x1="18" y1="26" x2="46" y2="23"/><line x1="18" y1="41" x2="46" y2="38"/>
+      </g>
+      <text x="32" y="84" text-anchor="middle" class="lbl">Slack</text>
+      <text x="32" y="100" text-anchor="middle" class="lbl2">OIDC provider</text>
+    </g>
+    <!-- 사내 사용자 -->
+    <g transform="translate(1010,46)">
+      <g fill="#7d8893">
+        <circle cx="20" cy="18" r="9"/><path d="M4,46 a16,16 0 0 1 32,0 Z"/>
+        <circle cx="44" cy="14" r="8"/><path d="M30,40 a14,14 0 0 1 28,0 Z" opacity=".85"/>
+      </g>
+      <text x="30" y="78" text-anchor="middle" class="lbl">사내 사용자 (500)</text>
+      <text x="30" y="94" text-anchor="middle" class="lbl2">Tauri 앱 · macOS / Windows</text>
+    </g>
+    <!-- Internet cloud -->
+    <g transform="translate(1010,218)">
+      <path d="M14,44 a14,14 0 0 1 2,-27 a16,16 0 0 1 30,-3 a13,13 0 0 1 8,30 Z" fill="#9aa4b0"/>
+      <text x="30" y="62" text-anchor="middle" class="lbl">Internet</text>
+    </g>
+
+    <!-- ===== AWS service icons ===== -->
+    <!-- AppSync -->
+    <g transform="translate(588,393)">
+      <rect width="64" height="64" rx="12" fill="url(#gMag)"/>
+      <path d="M32,12 L49,22 L49,42 L32,52 L15,42 L15,22 Z" fill="none" stroke="#fff" stroke-width="2.4"/>
+      <circle cx="32" cy="32" r="5" fill="#fff"/>
+      <text x="32" y="84" text-anchor="middle" class="lbl">AWS AppSync</text>
+      <text x="32" y="100" text-anchor="middle" class="lbl2">GraphQL API + 구독(WSS) · OIDC authorizer</text>
+      <text x="32" y="116" text-anchor="middle" class="lbl2">JS/VTL resolver (Lambda·Cognito 없음)</text>
+    </g>
+
+    <!-- Aurora (inside VPC) -->
+    <g transform="translate(588,598)">
+      <rect width="64" height="64" rx="12" fill="url(#gBlue)"/>
+      <g fill="none" stroke="#fff" stroke-width="2.4">
+        <ellipse cx="32" cy="20" rx="15" ry="5"/>
+        <path d="M17,20 L17,44"/><path d="M47,20 L47,44"/>
+        <path d="M17,32 a15,5 0 0 0 30,0"/>
+        <path d="M17,44 a15,5 0 0 0 30,0"/>
+      </g>
+      <text x="32" y="84" text-anchor="middle" class="lbl">Aurora Serverless v2</text>
+      <text x="32" y="100" text-anchor="middle" class="lbl2">PostgreSQL · private · 인터넷 노출 없음</text>
+    </g>
+  </svg>
+
+  <p class="foot">
+    구성: <b>AppSync · Aurora · CloudFront · S3</b> 4개 (+ 외부 Slack OIDC). Lambda·Cognito·CloudWatch 없음.
+    AppSync가 Slack OIDC 토큰을 직접 검증하고, JS/VTL resolver가 RDS Data API로 Aurora에 SQL 실행.
+    클라이언트는 DB에 직접 붙지 않으므로 <b>DB 인바운드는 0개방 유지(인터넷 노출 없음)</b>. · 생성 2026-05-22
+  </p>
+</div>
+</body>
+</html>

@@ -44,6 +44,13 @@ fn show_main_window(app: tauri::AppHandle) {
     tray::show_main_window(&app);
 }
 
+/// 앱 재시작 — 캐시 비우기 / 데이터 삭제 후 변경을 적용(JSONL 전량 재파싱)하려면 재실행이 필요.
+/// app.restart() 는 현재 프로세스를 종료하고 새 인스턴스를 실행한다 (반환하지 않음).
+#[tauri::command]
+fn restart_app(app: tauri::AppHandle) {
+    app.restart();
+}
+
 // ============================================================
 // [COMMAND MARKER] W2: get_summary, get_timeseries, get_top_mcp, get_top_plugins
 // invoke_handler에 해당 커맨드 추가 필요
@@ -52,7 +59,7 @@ fn show_main_window(app: tauri::AppHandle) {
 use aggregator::sync_aggregates_now;
 use commands::{
     clear_cache_dir, delete_all_data, get_heatmap, get_settings, get_summary, get_timeseries,
-    get_today_cost_usd, get_top_mcp, get_top_plugins, set_setting,
+    get_today_cost_usd, get_top_mcp, get_top_plugins, get_top_tools, set_setting,
 };
 use oauth_usage::{get_oauth_usage, refresh_oauth_usage};
 use tauri::Manager;
@@ -89,10 +96,12 @@ pub fn run() {
             get_timeseries,
             get_top_mcp,
             get_top_plugins,
+            get_top_tools,
             get_heatmap,
             get_today_cost_usd,
             get_data_dir,
             show_main_window,
+            restart_app,
             sync_aggregates_now,
             get_oauth_usage,
             refresh_oauth_usage,

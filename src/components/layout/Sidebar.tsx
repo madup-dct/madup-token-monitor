@@ -2,14 +2,31 @@ import type { ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useAuthUser } from "@/hooks/useAuthUser";
+import { roleAtLeast } from "@/hooks/useRole";
 import { signOut } from "@/lib/supabase";
-import { ThemeToggle } from "@/components/ui/ThemeToggle";
+import type { AppRole } from "@/types/models";
+
+const ROLE_LABEL: Record<AppRole, string | null> = {
+  user: null,
+  team_leader: "리더",
+  manager: "매니저",
+  admin: "어드민",
+};
+
+const ROLE_BADGE_TONE: Record<AppRole, string> = {
+  user: "",
+  team_leader: "bg-azure-soft text-azure-bright",
+  manager: "bg-azure-soft text-azure-bright",
+  admin: "bg-azure-soft text-azure-bright",
+};
 
 interface NavItemDef {
   to: string;
   end?: boolean;
   labelKey: string;
   group: "personal" | "team";
+  /// 이 권한 이상만 노출 (미지정 = 전원).
+  minRole?: AppRole;
   icon: ReactNode;
 }
 
@@ -35,7 +52,8 @@ const NAV_ITEMS: NavItemDef[] = [
   },
   {
     to: "/team",
-    labelKey: "nav.team",
+    end: true,
+    labelKey: "nav.teamMy",
     group: "team",
     icon: (
       <svg
@@ -44,10 +62,69 @@ const NAV_ITEMS: NavItemDef[] = [
         stroke="currentColor"
         strokeWidth="1.5"
         strokeLinecap="round"
+        strokeLinejoin="round"
       >
-        <path d="M2 14V9a2 2 0 012-2h2a2 2 0 012 2v5" />
-        <path d="M8 14V6a2 2 0 012-2h2a2 2 0 012 2v8" />
-        <path d="M1 14h14" />
+        <circle cx="6" cy="6" r="2.3" />
+        <path d="M2 13.5a4 4 0 018 0" />
+        <path d="M11 4.2a2.2 2.2 0 010 4.1" />
+        <path d="M12 13.5a4 4 0 00-2-3.4" />
+      </svg>
+    ),
+  },
+  {
+    to: "/team/company",
+    labelKey: "nav.teamCompany",
+    group: "team",
+    icon: (
+      <svg
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      >
+        <rect x="3" y="2.5" width="10" height="11" rx="1" />
+        <path d="M6 5.5h1.5M9 5.5h1M6 8h1.5M9 8h1M6 10.5h1.5M9 10.5h1" />
+      </svg>
+    ),
+  },
+  {
+    to: "/team/manage",
+    labelKey: "nav.teamManage",
+    group: "team",
+    minRole: "team_leader",
+    icon: (
+      <svg
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      >
+        <path d="M2 5h7M11.5 5H14M2 11h2.5M7 11h7" />
+        <circle cx="10" cy="5" r="1.6" />
+        <circle cx="5.5" cy="11" r="1.6" />
+      </svg>
+    ),
+  },
+  {
+    to: "/team/admin",
+    labelKey: "nav.teamAdmin",
+    group: "team",
+    minRole: "manager",
+    icon: (
+      <svg
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M2 14h12" />
+        <rect x="3" y="8" width="2.4" height="4" rx="0.5" />
+        <rect x="6.8" y="5" width="2.4" height="7" rx="0.5" />
+        <rect x="10.6" y="2.5" width="2.4" height="9.5" rx="0.5" />
       </svg>
     ),
   },
@@ -64,10 +141,12 @@ function initials(text: string | undefined | null) {
 
 export function Sidebar() {
   const { t } = useTranslation();
-  const { user } = useAuthUser();
+  const { user, role } = useAuthUser();
   const navigate = useNavigate();
   const location = useLocation();
   const settingsActive = location.pathname.startsWith("/settings");
+  const roleLabel = ROLE_LABEL[role];
+  const roleBadgeTone = ROLE_BADGE_TONE[role];
 
   async function handleSignOut() {
     await signOut();
@@ -127,7 +206,9 @@ export function Sidebar() {
         <div className="text-[10.5px] font-bold tracking-[0.16em] uppercase text-text-faint px-3 pt-3.5 pb-2 whitespace-nowrap">
           Team
         </div>
-        {NAV_ITEMS.filter((i) => i.group === "team").map((item) => (
+        {NAV_ITEMS.filter(
+          (i) => i.group === "team" && roleAtLeast(role, i.minRole ?? "user"),
+        ).map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
@@ -175,12 +256,21 @@ export function Sidebar() {
             <div className="text-[12px] font-semibold text-text-primary leading-tight truncate">
               {user.name ?? user.email}
             </div>
-            <div className="text-[11px] text-text-tertiary leading-tight mt-0.5 truncate">
-              {user.email}
+            <div className="flex items-center gap-1.5 min-w-0 mt-0.5">
+              {roleLabel ? (
+                <span
+                  className={`shrink-0 text-[9px] font-bold tracking-[0.08em] uppercase rounded px-1.5 py-px leading-[1.6] ${roleBadgeTone}`}
+                  title={`권한: ${roleLabel}`}
+                >
+                  {roleLabel}
+                </span>
+              ) : null}
+              <span className="text-[11px] text-text-tertiary leading-tight truncate">
+                {user.email}
+              </span>
             </div>
           </div>
           <div className="flex gap-0.5">
-            <ThemeToggle />
             <button
               type="button"
               onClick={() => navigate("/settings")}
@@ -225,11 +315,10 @@ export function Sidebar() {
           </div>
         </div>
       ) : (
-        <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-surface-1 border border-hairline">
+        <div className="p-2 rounded-lg bg-surface-1 border border-hairline">
           <div className="text-[11px] text-text-tertiary truncate">
             로그인 필요
           </div>
-          <ThemeToggle />
         </div>
       )}
     </aside>

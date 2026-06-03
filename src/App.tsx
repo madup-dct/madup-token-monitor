@@ -9,8 +9,12 @@ import { onOpenUrl, getCurrent } from "@tauri-apps/plugin-deep-link";
 import "@/i18n/index";
 import { Dashboard } from "@/pages/Dashboard";
 import CompanyDashboard from "@/pages/CompanyDashboard";
+import TeamMy from "@/pages/TeamMy";
+import TeamManage from "@/pages/TeamManage";
+import AdminAnalytics from "@/pages/AdminAnalytics";
 import Settings from "@/pages/Settings";
 import Login from "@/pages/Login";
+import UserDashboard from "@/pages/UserDashboard";
 import { AuthGuard } from "@/lib/AuthGuard";
 import { handleAuthCallback, syncAggregatesNow } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
@@ -42,7 +46,11 @@ function Layout() {
           <main className="flex-1 overflow-y-auto min-w-0">
             <Routes>
               <Route path="/" element={<Dashboard />} />
-              <Route path="/team" element={<CompanyDashboard />} />
+              <Route path="/team" element={<TeamMy />} />
+              <Route path="/team/company" element={<CompanyDashboard />} />
+              <Route path="/team/manage" element={<TeamManage />} />
+              <Route path="/team/admin" element={<AdminAnalytics />} />
+              <Route path="/user/:id" element={<UserDashboard />} />
               <Route path="/settings" element={<Settings />} />
             </Routes>
           </main>

@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { fetchMyRole, fetchMyTeamIds } from "@/lib/teams";
+import type { AppRole } from "@/types/models";
 
 export interface AuthUser {
   id: string;
@@ -36,17 +38,48 @@ function deriveUser(u: { id: string; email?: string | null; user_metadata?: Reco
 export function useAuthUser() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [role, setRole] = useState<AppRole>("user");
+  const [myTeamIds, setMyTeamIds] = useState<string[]>([]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function loadRoleAndTeams() {
+      try {
+        const [r, ids] = await Promise.all([fetchMyRole(), fetchMyTeamIds()]);
+        if (cancelled) return;
+        setRole(r);
+        setMyTeamIds(ids);
+      } catch {
+        if (cancelled) return;
+        setRole("user");
+        setMyTeamIds([]);
+      }
+    }
+
     supabase.auth.getUser().then(({ data }) => {
-      setUser(deriveUser(data.user));
+      if (cancelled) return;
+      const u = deriveUser(data.user);
+      setUser(u);
       setLoading(false);
+      if (u) loadRoleAndTeams();
     });
+
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
-      setUser(deriveUser(session?.user ?? null));
+      const u = deriveUser(session?.user ?? null);
+      setUser(u);
+      if (u) {
+        loadRoleAndTeams();
+      } else {
+        setRole("user");
+        setMyTeamIds([]);
+      }
     });
-    return () => sub.subscription.unsubscribe();
+    return () => {
+      cancelled = true;
+      sub.subscription.unsubscribe();
+    };
   }, []);
 
-  return { user, loading };
+  return { user, loading, role, myTeamIds };
 }

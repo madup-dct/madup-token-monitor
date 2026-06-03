@@ -191,6 +191,35 @@ html.theme-light {
   ::-webkit-scrollbar-thumb:hover {
     background: var(--color-text-faint);
   }
+
+  /* 버튼 press 피드백 — 클릭 시 살짝 눌리는 스케일. base 레이어라 기존 유틸/Tailwind
+     transition(색 전환 등)을 덮어쓰지 않고, :active 스케일만 모든 버튼에 보장한다. */
+  button,
+  [role="button"],
+  [role="tab"],
+  [role="switch"] {
+    transition: transform 110ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  button:not(:disabled):active,
+  [role="button"]:not([aria-disabled="true"]):active,
+  [role="tab"]:active,
+  [role="switch"]:active {
+    transform: scale(0.96);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    button,
+    [role="button"],
+    [role="tab"],
+    [role="switch"] {
+      transition: none;
+    }
+    button:active,
+    [role="button"]:active,
+    [role="tab"]:active,
+    [role="switch"]:active {
+      transform: none;
+    }
+  }
 }
 
 /* ============================================================================
@@ -378,12 +407,17 @@ html.theme-light {
   background-color: transparent;
   color: var(--color-text-tertiary);
   cursor: pointer;
-  transition: background 140ms ease, color 140ms ease;
+  transition: background 140ms ease, color 140ms ease,
+    transform 110ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 @utility mc-icon-btn {
   &:hover {
     background-color: var(--color-surface-2);
     color: var(--color-text-secondary);
+  }
+  &:active {
+    background-color: var(--color-surface-3);
+    transform: scale(0.9);
   }
 }
 

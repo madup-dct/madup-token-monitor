@@ -1,7 +1,10 @@
 {
   "nav": {
     "dashboard": "내 대시보드",
-    "team": "사내 대시보드",
+    "teamMy": "내 팀",
+    "teamCompany": "사내 대시보드",
+    "teamManage": "팀 관리",
+    "teamAdmin": "사용량 분석",
     "settings": "설정"
   },
   "dashboard": {
@@ -9,7 +12,8 @@
     "period": {
       "today": "오늘",
       "week": "7일",
-      "month": "30일"
+      "month": "30일",
+      "quarter": "90일"
     },
     "cards": {
       "totalTokens": "총 토큰",

@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { formatTokensCompact, formatUSD } from "@/lib/format";
+import { tickY } from "@/lib/usage-math";
 
 interface DailyBarRow {
   date: string;
@@ -85,8 +86,8 @@ export function DailyBarChart({
 
       {/* horizontal gridlines */}
       <g stroke="rgba(255,255,255,0.05)" strokeWidth={1}>
-        {ticks.map((_, i) => {
-          const y = PAD_TOP + (innerH * (i + 1)) / 5;
+        {ticks.map((t, i) => {
+          const y = tickY(t, maxVal, PAD_TOP, innerH);
           return (
             <line key={i} x1={Y_AXIS_W} y1={y} x2={CHART_W} y2={y} />
           );
@@ -96,7 +97,7 @@ export function DailyBarChart({
       {/* y-axis labels */}
       <g fill="#454E6A" fontSize="10" fontFamily="JetBrains Mono, monospace">
         {ticks.map((t, i) => {
-          const y = PAD_TOP + (innerH * (i + 1)) / 5;
+          const y = tickY(t, maxVal, PAD_TOP, innerH);
           return (
             <text key={i} x={Y_AXIS_W - 6} y={y + 3} textAnchor="end">
               {fmt(t)}
@@ -153,25 +154,31 @@ export function DailyBarChart({
         strokeWidth={1}
       />
 
-      {/* x-axis labels */}
+      {/* x-axis labels — 라벨이 많으면 매 N 번째만 노출 (마지막=오늘 항상) */}
       <g fill="#6A7593" fontSize="10.5" fontFamily="JetBrains Mono, monospace">
-        {rows.map((r, i) => {
-          const x = Y_AXIS_W + i * colW + colW / 2;
-          const isToday = highlightLast && i === rows.length - 1;
-          return (
-            <text
-              key={r.date}
-              x={x}
-              y={CHART_H - 8}
-              textAnchor="middle"
-              fill={isToday ? "#B68CFF" : "#6A7593"}
-              fontWeight={isToday ? 600 : 400}
-              fontFamily={isToday ? "Pretendard, sans-serif" : "JetBrains Mono, monospace"}
-            >
-              {isToday ? "오늘" : r.date}
-            </text>
-          );
-        })}
+        {(() => {
+          // 평균 라벨 폭 ~ 36px 기준. colW 가 그보다 작으면 thin-out.
+          const step = Math.max(1, Math.ceil(36 / Math.max(colW, 1)));
+          return rows.map((r, i) => {
+            const isToday = highlightLast && i === rows.length - 1;
+            const showLabel = isToday || i % step === 0;
+            if (!showLabel) return null;
+            const x = Y_AXIS_W + i * colW + colW / 2;
+            return (
+              <text
+                key={r.date}
+                x={x}
+                y={CHART_H - 8}
+                textAnchor="middle"
+                fill={isToday ? "#B68CFF" : "#6A7593"}
+                fontWeight={isToday ? 600 : 400}
+                fontFamily={isToday ? "Pretendard, sans-serif" : "JetBrains Mono, monospace"}
+              >
+                {isToday ? "오늘" : r.date}
+              </text>
+            );
+          });
+        })()}
       </g>
 
       {/* avg dashed line */}
@@ -204,7 +211,7 @@ export function DailyBarChart({
   );
 }
 
-function niceTickStep(roughStep: number): number {
+export function niceTickStep(roughStep: number): number {
   if (roughStep <= 0) return 1;
   const exp = Math.floor(Math.log10(roughStep));
   const base = Math.pow(10, exp);

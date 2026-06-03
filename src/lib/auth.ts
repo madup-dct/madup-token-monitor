@@ -56,6 +56,8 @@ export interface SyncResult {
   usage_rows: number;
   mcp_rows: number;
   plugin_rows: number;
+  hourly_rows: number;
+  tool_rows: number;
 }
 
 export async function syncAggregatesNow(): Promise<SyncResult | null> {

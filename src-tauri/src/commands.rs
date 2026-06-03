@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::db::{db_path, open, range_bounds};
-use crate::models::{DayCount, McpUsage, PluginUsage, Point, Summary, SourceSummary, ModelSummary};
+use crate::models::{DayCount, McpUsage, PluginUsage, Point, Summary, SourceSummary, ModelSummary, ToolUsage};
 use crate::pricing::usd_to_krw_rate;
 
 /// 오늘(local-tz 자정 기준) USD 비용 합계. 트레이 타이틀 표시용.
@@ -79,32 +79,49 @@ pub fn set_setting(key: String, value: JsonValue) -> Result<(), String> {
 }
 
 /// React Query 영속 캐시 등 클라이언트 캐시는 JS 측에서 비우고,
-/// 여기서는 SQLite WAL/SHM 등 부수 파일과 임시 캐시 디렉토리만 정리한다.
+/// 여기서는 SQLite WAL 을 checkpoint(TRUNCATE) 로 안전하게 회수한다.
+/// (열린 DB 의 -wal/-shm 을 직접 remove 하면 in-flight write 손상 위험 → 파일 삭제 대신 체크포인트)
 #[tauri::command]
 pub fn clear_cache_dir() -> Result<u64, String> {
-    let Some(parent) = db_path().parent().map(|p| p.to_path_buf()) else {
+    let db = db_path();
+    let Some(parent) = db.parent() else {
         return Err("데이터 디렉토리를 찾을 수 없습니다".into());
     };
-    let mut bytes_freed: u64 = 0;
-    for name in ["usage.sqlite-wal", "usage.sqlite-shm"] {
-        let p = parent.join(name);
-        if let Ok(meta) = std::fs::metadata(&p) {
-            bytes_freed = bytes_freed.saturating_add(meta.len());
-        }
-        let _ = std::fs::remove_file(&p);
+    let db_name = db.file_name().and_then(|s| s.to_str()).unwrap_or("data.db");
+    // 회수 전 WAL 크기 (리포트용). 실제 파일명은 <db>-wal (예: data.db-wal).
+    let freed = std::fs::metadata(parent.join(format!("{db_name}-wal")))
+        .map(|m| m.len())
+        .unwrap_or(0);
+    if let Ok(conn) = open() {
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
     }
-    Ok(bytes_freed)
+    Ok(freed)
 }
 
-/// 모든 로컬 데이터 (SQLite + WAL/SHM + settings.json) 삭제.
-/// 호출 후 앱을 재시작해야 새 SQLite 가 다시 만들어진다.
+/// delete_all_data 가 지울 파일 목록 — db_path() 기준 파생 (db + wal/shm + settings.json).
+/// 파일명을 하드코딩하지 않는다: 과거 'usage.sqlite' 로 하드코딩돼 실제 'data.db' 를 못 지운 버그가 있었음.
+fn data_files(db: &std::path::Path) -> Vec<PathBuf> {
+    let Some(parent) = db.parent() else {
+        return Vec::new();
+    };
+    let name = db.file_name().and_then(|s| s.to_str()).unwrap_or("data.db");
+    vec![
+        parent.join(name),
+        parent.join(format!("{name}-wal")),
+        parent.join(format!("{name}-shm")),
+        parent.join("settings.json"),
+    ]
+}
+
+/// 모든 로컬 데이터 (SQLite db + WAL/SHM + settings.json) 삭제.
+/// 호출 후 앱을 재시작해야 새 SQLite 가 다시 만들어지고 JSONL 이 전량 재파싱된다.
 #[tauri::command]
 pub fn delete_all_data() -> Result<(), String> {
-    let Some(parent) = db_path().parent().map(|p| p.to_path_buf()) else {
+    let files = data_files(&db_path());
+    if files.is_empty() {
         return Err("데이터 디렉토리를 찾을 수 없습니다".into());
-    };
-    for name in ["usage.sqlite", "usage.sqlite-wal", "usage.sqlite-shm", "settings.json"] {
-        let p = parent.join(name);
+    }
+    for p in files {
         let _ = std::fs::remove_file(&p);
     }
     Ok(())
@@ -328,6 +345,37 @@ pub fn get_top_plugins(range: String) -> Result<Vec<PluginUsage>, String> {
     Ok(items)
 }
 
+/// 도구(tool_name) 별 호출 TOP — "주 사용 tools" 관찰용.
+#[tauri::command]
+pub fn get_top_tools(range: String) -> Result<Vec<ToolUsage>, String> {
+    let conn = open().map_err(|e| e.to_string())?;
+    let (start, end) = range_bounds(&range);
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT tool_name, COUNT(*) as cnt
+             FROM tool_calls
+             WHERE ts BETWEEN ?1 AND ?2 AND tool_name IS NOT NULL AND tool_name <> ''
+             GROUP BY tool_name
+             ORDER BY cnt DESC
+             LIMIT 10",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let items = stmt
+        .query_map(params![start, end], |row| {
+            Ok(ToolUsage {
+                tool_name: row.get(0)?,
+                count: row.get(1)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .collect();
+
+    Ok(items)
+}
+
 #[tauri::command]
 pub fn get_heatmap(days: Option<i64>) -> Result<Vec<DayCount>, String> {
     let conn = open().map_err(|e| e.to_string())?;
@@ -360,4 +408,30 @@ pub fn get_heatmap(days: Option<i64>) -> Result<Vec<DayCount>, String> {
         .collect();
 
     Ok(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    // 회귀: delete_all_data 가 지울 파일이 db_path() 기준으로 파생되는지 (옛 'usage.sqlite' 하드코딩 금지).
+    #[test]
+    fn data_files_derive_from_db_path() {
+        let files = data_files(Path::new("/x/y/data.db"));
+        let names: Vec<String> = files.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "/x/y/data.db".to_string(),
+                "/x/y/data.db-wal".to_string(),
+                "/x/y/data.db-shm".to_string(),
+                "/x/y/settings.json".to_string(),
+            ]
+        );
+        // 실제 DB 파일(data.db)이 삭제 대상에 포함돼야 한다.
+        assert!(names.iter().any(|n| n.ends_with("/data.db")));
+        // 옛 잘못된 이름이 남아있지 않아야 한다.
+        assert!(!names.iter().any(|n| n.contains("usage.sqlite")));
+    }
 }

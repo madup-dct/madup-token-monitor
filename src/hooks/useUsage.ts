@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import type { Summary, Point, McpUsage, PluginUsage, DayCount, Range } from "@/types/models";
+import type { Summary, Point, McpUsage, PluginUsage, DayCount, Range, ToolUsage } from "@/types/models";
 import {
   buildMockSummary,
   buildMockTimeseries,
   buildMockTopMcp,
   buildMockTopPlugins,
+  buildMockTopTools,
   buildMockHeatmap,
   buildMockCompanyTopMcp,
 } from "@/mocks/usageMock";
@@ -95,14 +96,24 @@ async function fetchMyAggregatedPoints(
   }
 }
 
-export function useTimeseries(range: Range, source?: string) {
+export function useTimeseries(
+  range: Range,
+  source?: string,
+  opts?: { preferLocal?: boolean },
+) {
+  // preferLocal: 시간별(hourly) 뷰 전용. Supabase usage_aggregates 는 일(day) 단위라
+  // 모든 점의 ts 가 날짜 자정(00:00)이 된다 → 시간별로 버킷하면 전량 00시에 몰린다.
+  // 로컬 get_timeseries 는 실제 이벤트 ts 를 시간 버킷으로 주므로 시간별은 로컬을 강제한다.
+  const preferLocal = opts?.preferLocal ?? false;
   return useQuery({
-    queryKey: ["timeseries", range, source],
+    queryKey: ["timeseries", range, source, preferLocal ? "local" : "agg"],
     queryFn: async () => {
       if (IS_MOCK) return delay(buildMockTimeseries(range, source));
       // 로그인 시 Supabase 합산본 우선 (다중 디바이스), 실패/비로그인 시 로컬.
-      const agg = await fetchMyAggregatedPoints(range, source);
-      if (agg && agg.length > 0) return agg;
+      if (!preferLocal) {
+        const agg = await fetchMyAggregatedPoints(range, source);
+        if (agg && agg.length > 0) return agg;
+      }
       return tauriInvoke<Point[]>("get_timeseries", {
         range,
         source: source ?? null,
@@ -130,6 +141,17 @@ export function useTopPlugins(range: Range) {
       IS_MOCK
         ? delay(buildMockTopPlugins(range))
         : tauriInvoke<PluginUsage[]>("get_top_plugins", { range }),
+    staleTime: 30_000,
+  });
+}
+
+export function useTopTools(range: Range) {
+  return useQuery({
+    queryKey: ["top_tools", range],
+    queryFn: () =>
+      IS_MOCK
+        ? delay(buildMockTopTools(range))
+        : tauriInvoke<ToolUsage[]>("get_top_tools", { range }),
     staleTime: 30_000,
   });
 }
@@ -299,14 +321,19 @@ export function useCompanyLeaderboard(range: LeaderboardRange = "week") {
         throw new Error(error.message);
       }
       const rows = (data ?? []) as CompanyLeaderboardRow[];
-      return rows.map((r, i) => ({
-        rank: i + 1,
-        user_id: r.user_id ?? null,
-        display_name: r.display_name,
-        avatar_url: r.avatar_url,
-        total_cost: Number(r.total_cost),
-        total_tokens: Number(r.total_tokens),
-      }));
+      // 사용량 리더보드 — TOKENS 가 1차 지표. RPC 가 비용순으로 반환해도
+      // 클라이언트에서 토큰 내림차순 재정렬 + rank 재부여 (rank = 토큰 순위).
+      return rows
+        .slice()
+        .sort((a, b) => Number(b.total_tokens) - Number(a.total_tokens))
+        .map((r, i) => ({
+          rank: i + 1,
+          user_id: r.user_id ?? null,
+          display_name: r.display_name,
+          avatar_url: r.avatar_url,
+          total_cost: Number(r.total_cost),
+          total_tokens: Number(r.total_tokens),
+        }));
     },
     // 익명 토글 등 프로필 변경이 빠르게 반영돼야 하므로 staleTime은 짧게.
     staleTime: 30_000,
@@ -367,3 +394,155 @@ export function useUserPlugins(userId: string | null, rangeDays = 30) {
     retry: 0,
   });
 }
+
+export interface UserToolRow {
+  tool_name: string;
+  count: number;
+}
+
+/// 특정 user 의 도구(tool_name) TOP — get_user_tools (security definer).
+export function useUserTools(userId: string | null, rangeDays = 30) {
+  return useQuery<UserToolRow[], Error>({
+    queryKey: ["user_tools", userId, rangeDays],
+    enabled: !!userId,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("get_user_tools", {
+        p_user: userId,
+        range_days: rangeDays,
+      });
+      if (error) throw new Error(error.message);
+      return ((data ?? []) as { tool_name: string; total_count: number }[]).map((r) => ({
+        tool_name: r.tool_name,
+        count: Number(r.total_count),
+      }));
+    },
+    staleTime: 60_000,
+    retry: 0,
+  });
+}
+
+// =============================================================================
+// 매니저 전용 사용량 분석 (manager+ — get_directory / get_*_users / 사원 토큰 시계열)
+// =============================================================================
+
+export interface DirectoryRow {
+  user_id: string;
+  display_name: string;
+  email: string | null;
+  role: string;
+  teams: string | null;
+  total_tokens: number;
+  total_cost: number;
+}
+
+/// 전사 유저 디렉토리 (권한/팀/토큰/비용). manager+ 가드 RPC.
+export function useDirectory(rangeDays = 30) {
+  return useQuery<DirectoryRow[], Error>({
+    queryKey: ["directory", rangeDays],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("get_directory", { p_range_days: rangeDays });
+      if (error) throw new Error(error.message);
+      return ((data ?? []) as DirectoryRow[]).map((r) => ({
+        ...r,
+        total_tokens: Number(r.total_tokens),
+        total_cost: Number(r.total_cost),
+      }));
+    },
+    staleTime: 60_000,
+    retry: 0,
+  });
+}
+
+export interface EntityUserRow {
+  user_id: string;
+  display_name: string;
+  avatar_url: string | null;
+  value: number;
+}
+
+/// 엔터티(MCP/플러그인) 를 쓴 사용자 + 사용량. kind 별 RPC 분기.
+/// entity 가 null 이면 비활성 (모달 닫힘 상태).
+export function useEntityUsers(
+  kind: "mcp" | "plugin" | null,
+  entity: string | null,
+  rangeDays = 30,
+) {
+  return useQuery<EntityUserRow[], Error>({
+    queryKey: ["entity_users", kind, entity, rangeDays],
+    enabled: !!kind && !!entity,
+    queryFn: async () => {
+      if (!kind || !entity) return [];
+      const rpc =
+        kind === "mcp"
+          ? { fn: "get_mcp_users", arg: "p_mcp_server", field: "total_count" }
+          : { fn: "get_plugin_users", arg: "p_plugin_id", field: "total_count" };
+      const { data, error } = await supabase.rpc(rpc.fn, {
+        [rpc.arg]: entity,
+        p_range_days: rangeDays,
+      });
+      if (error) throw new Error(error.message);
+      return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+        user_id: String(r.user_id),
+        display_name: String(r.display_name),
+        avatar_url: (r.avatar_url as string | null) ?? null,
+        value: Number(r[rpc.field] ?? 0),
+      }));
+    },
+    staleTime: 60_000,
+    retry: 0,
+  });
+}
+
+export interface CompanyUsageByUserRow {
+  user_id: string;
+  date: string;
+  total_tokens: number;
+}
+
+/// 전사 사원별 일별 토큰 (일/주/월 라인차트의 per-bucket 통계 계산용). manager+ 가드.
+export function useCompanyUsageByUser(rangeDays = 365) {
+  return useQuery<CompanyUsageByUserRow[], Error>({
+    queryKey: ["company_usage_by_user", rangeDays],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("get_company_usage_by_user", {
+        p_range_days: rangeDays,
+      });
+      if (error) throw new Error(error.message);
+      return ((data ?? []) as CompanyUsageByUserRow[]).map((r) => ({
+        user_id: r.user_id,
+        date: r.date,
+        total_tokens: Number(r.total_tokens),
+      }));
+    },
+    staleTime: 60_000,
+    retry: 0,
+  });
+}
+
+export interface CompanyHourlyByUserRow {
+  user_id: string;
+  hour_utc: string;
+  total_tokens: number;
+}
+
+/// 전사 사원별 시간별 토큰. granularity=시간별일 때만 enabled. manager+ 가드.
+export function useCompanyHourlyByUser(hours = 48, enabled = true) {
+  return useQuery<CompanyHourlyByUserRow[], Error>({
+    queryKey: ["company_hourly_by_user", hours],
+    enabled,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("get_company_hourly_by_user", {
+        p_hours: hours,
+      });
+      if (error) throw new Error(error.message);
+      return ((data ?? []) as CompanyHourlyByUserRow[]).map((r) => ({
+        user_id: r.user_id,
+        hour_utc: r.hour_utc,
+        total_tokens: Number(r.total_tokens),
+      }));
+    },
+    staleTime: 60_000,
+    retry: 0,
+  });
+}
+

@@ -5,13 +5,6 @@
     <link rel="icon" type="image/png" href="/madup-favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>매드업 토큰 모니터</title>
-    <script>
-      // FOUC 방지: localStorage 의 테마를 동기적으로 적용해 첫 페인트부터 올바른 테마로.
-      try {
-        var t = localStorage.getItem("madup-theme");
-        if (t === "light") document.documentElement.classList.add("theme-light");
-      } catch (e) {}
-    </script>
   </head>
 
   <body>

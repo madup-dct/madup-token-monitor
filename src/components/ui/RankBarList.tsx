@@ -1,6 +1,8 @@
 interface RankBarListItem {
   label: string;
   value: number;
+  /// hover 툴팁 (미지정 시 label). 예: 프로젝트 전체 경로.
+  title?: string;
 }
 
 type Variant = "azure" | "violet" | "lime" | "amber" | "coral";
@@ -13,6 +15,8 @@ interface RankBarListProps {
   emptyMessage?: string;
   maxRows?: number;
   className?: string;
+  /// 지정 시 각 row 가 클릭 가능 (hover 강조). 예: 엔터티 → 사용자 리스트 모달.
+  onItemClick?: (item: RankBarListItem, index: number) => void;
 }
 
 const FILL: Record<Variant, string> = {
@@ -41,6 +45,7 @@ export function RankBarList({
   emptyMessage = "기록 없음",
   maxRows = 8,
   className,
+  onItemClick,
 }: RankBarListProps) {
   const rows = items.slice(0, maxRows);
   if (rows.length === 0) {
@@ -57,14 +62,14 @@ export function RankBarList({
       {rows.map((it, idx) => {
         const variant: Variant = variants[idx % variants.length];
         const ratio = it.value / max;
-        return (
-          <div key={`${it.label}-${idx}`}>
+        const inner = (
+          <>
             <div className="flex items-center justify-between gap-2 mb-1.5">
               <span className="flex items-center gap-2 min-w-0 text-[12px] text-text-primary font-medium">
                 <span className="num shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-full bg-surface-2 text-text-tertiary text-[10px] font-semibold">
                   {idx + 1}
                 </span>
-                <span className="truncate" title={it.label}>
+                <span className="truncate" title={it.title ?? it.label}>
                   {it.label}
                 </span>
               </span>
@@ -83,7 +88,19 @@ export function RankBarList({
                 }}
               />
             </div>
-          </div>
+          </>
+        );
+        return onItemClick ? (
+          <button
+            key={`${it.label}-${idx}`}
+            type="button"
+            onClick={() => onItemClick(it, idx)}
+            className="w-full text-left -mx-1 px-1 py-0.5 rounded-md hover:bg-surface-2 transition-colors"
+          >
+            {inner}
+          </button>
+        ) : (
+          <div key={`${it.label}-${idx}`}>{inner}</div>
         );
       })}
     </div>

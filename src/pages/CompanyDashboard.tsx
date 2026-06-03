@@ -1,14 +1,12 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useCompanyLeaderboard,
   useCompanyTopMcp,
   useCompanyTopPlugins,
-  useUserMcp,
-  useUserPlugins,
   useSummary,
   type LeaderboardRange,
-  type CompanyLeaderboardEntry,
 } from "@/hooks/useUsage";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { Sparkline } from "@/components/ui/Sparkline";
@@ -16,7 +14,7 @@ import { RingMeter } from "@/components/ui/RingMeter";
 import { RankBarList } from "@/components/ui/RankBarList";
 import { Leaderboard } from "@/components/charts/Leaderboard";
 import { PrismCarousel } from "@/components/ui/PrismCarousel";
-import { Modal } from "@/components/ui/Modal";
+import { KpiHero } from "@/components/dashboard/KpiHero";
 import {
   formatTokensCompact,
   formatUSD,
@@ -34,11 +32,9 @@ const PERIOD_SUFFIX: Record<LeaderboardRange, string> = {
 export default function CompanyDashboard() {
   const qc = useQueryClient();
   const { user } = useAuthUser();
+  const navigate = useNavigate();
   const [carouselIdx, setCarouselIdx] = useState(1); // 0=오늘 1=이번주 2=이번달
   const [autoRotate, setAutoRotate] = useState(true);
-  const [detailUser, setDetailUser] = useState<CompanyLeaderboardEntry | null>(
-    null,
-  );
   const [refreshing, setRefreshing] = useState(false);
 
   const period = RANGES[carouselIdx];
@@ -97,6 +93,14 @@ export default function CompanyDashboard() {
   const totalMcpCalls = mcpRows.reduce((a, r) => a + r.count, 0);
   const totalPluginUses = pluginRows.reduce((a, r) => a + r.count, 0);
   const totalCalls = totalMcpCalls + totalPluginUses;
+
+  // 사용자별 토큰 분포 통계 (선택 기간) — 평균/최대/최소.
+  const userTokenStats = useMemo(() => {
+    const vals = rows.map((r) => r.total_tokens);
+    if (vals.length === 0) return { avg: 0, max: 0, min: 0 };
+    const sum = vals.reduce((a, b) => a + b, 0);
+    return { avg: sum / vals.length, max: Math.max(...vals), min: Math.min(...vals) };
+  }, [rows]);
 
   // 모델별 토큰 (내 7일).
   const myModelItems = useMemo(() => {
@@ -333,7 +337,6 @@ export default function CompanyDashboard() {
             activeIndex={carouselIdx}
             onIndexChange={setCarouselIdx}
             auto={autoRotate}
-            paused={detailUser !== null}
             intervalMs={5000}
             height={460}
             faces={RANGES.map((r) => {
@@ -353,7 +356,15 @@ export default function CompanyDashboard() {
                       rows={qrows}
                       meIdentifier={user?.email ?? user?.name ?? null}
                       isLoading={q.isLoading}
-                      onRowClick={setDetailUser}
+                      onRowClick={(e) =>
+                        navigate(`/user/${e.user_id}`, {
+                          state: {
+                            entry: e,
+                            rangeDays: leaderboardDays,
+                            periodLabel: PERIOD_SUFFIX[r],
+                          },
+                        })
+                      }
                       footerContext={
                         qrows.length > 0
                           ? `${PERIOD_SUFFIX[r]} · ${qrows.length}명 · 행 클릭 시 상세`
@@ -389,8 +400,28 @@ export default function CompanyDashboard() {
             className="mt-4 rounded-[10px] border border-hairline p-3.5"
             style={{ background: "var(--color-surface-2)" }}
           >
-            <div className="text-[10.5px] font-bold tracking-[0.14em] uppercase text-text-tertiary mb-1.5">
-              사내 토큰 분포 ({PERIOD_SUFFIX[period]})
+            <div className="text-[10.5px] font-bold tracking-[0.14em] uppercase text-text-tertiary mb-2">
+              사용자별 토큰 분포 ({PERIOD_SUFFIX[period]})
+            </div>
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              <div>
+                <div className="text-[9.5px] text-text-faint mb-0.5">평균</div>
+                <div className="num text-[15px] font-medium text-azure">
+                  {formatTokensCompact(userTokenStats.avg)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[9.5px] text-text-faint mb-0.5">최대</div>
+                <div className="num text-[15px] font-medium text-lime">
+                  {formatTokensCompact(userTokenStats.max)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[9.5px] text-text-faint mb-0.5">최소</div>
+                <div className="num text-[15px] font-medium text-amber">
+                  {formatTokensCompact(userTokenStats.min)}
+                </div>
+              </div>
             </div>
             <Sparkline
               values={
@@ -482,194 +513,14 @@ export default function CompanyDashboard() {
         </section>
       </div>
 
-      {detailUser && (
-        <UserDetailModal
-          entry={detailUser}
-          rangeDays={leaderboardDays}
-          periodLabel={PERIOD_SUFFIX[period]}
-          onClose={() => setDetailUser(null)}
-        />
-      )}
     </div>
   );
 }
 
-// =============================================================================
-// USER 행 클릭 상세 모달 — 토큰/비용 요약 + MCP TOP + 플러그인 TOP.
-// 모델별 토큰은 usage_aggregates 에 model 차원이 없어 제외.
-// =============================================================================
-function UserDetailModal({
-  entry,
-  rangeDays,
-  periodLabel,
-  onClose,
-}: {
-  entry: CompanyLeaderboardEntry;
-  rangeDays: number;
-  periodLabel: string;
-  onClose: () => void;
-}) {
-  const mcp = useUserMcp(entry.user_id, rangeDays);
-  const plugins = useUserPlugins(entry.user_id, rangeDays);
-  const mcpRows = mcp.data ?? [];
-  const pluginRows = plugins.data ?? [];
-
-  return (
-    <Modal
-      open
-      onClose={onClose}
-      title={`${entry.display_name} · ${periodLabel}`}
-      maxWidth={720}
-    >
-      {/* 요약 */}
-      <div className="grid grid-cols-3 gap-4 mb-5">
-        <div>
-          <div className="text-[10.5px] font-bold tracking-[0.14em] uppercase text-text-tertiary mb-1.5">
-            순위
-          </div>
-          <div className="num text-[22px] font-medium text-violet">
-            #{entry.rank}
-          </div>
-        </div>
-        <div>
-          <div className="text-[10.5px] font-bold tracking-[0.14em] uppercase text-text-tertiary mb-1.5">
-            토큰
-          </div>
-          <div className="num text-[22px] font-medium text-azure">
-            {formatTokensCompact(entry.total_tokens)}
-          </div>
-        </div>
-        <div>
-          <div className="text-[10.5px] font-bold tracking-[0.14em] uppercase text-text-tertiary mb-1.5">
-            비용
-          </div>
-          <div className="num text-[22px] font-medium text-amber">
-            {formatUSD(entry.total_cost)}
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-5">
-        <section>
-          <header className="mb-3">
-            <span className="text-[13px] font-semibold text-text-primary">
-              MCP TOP
-            </span>
-            <span className="text-[11px] text-text-tertiary ml-2">
-              호출 횟수
-            </span>
-          </header>
-          {mcp.error ? (
-            <p className="text-[12px] text-coral">
-              RPC 실패: {String(mcp.error.message)}
-            </p>
-          ) : (
-            <RankBarList
-              items={mcpRows.map((m) => ({
-                label: m.mcp_server,
-                value: m.count,
-              }))}
-              formatValue={(v) => v.toLocaleString("ko-KR")}
-              emptyMessage={mcp.isLoading ? "불러오는 중…" : "MCP 기록 없음"}
-            />
-          )}
-        </section>
-        <section>
-          <header className="mb-3">
-            <span className="text-[13px] font-semibold text-text-primary">
-              플러그인 TOP
-            </span>
-            <span className="text-[11px] text-text-tertiary ml-2">
-              사용 횟수
-            </span>
-          </header>
-          {plugins.error ? (
-            <p className="text-[12px] text-coral">
-              RPC 실패: {String(plugins.error.message)}
-            </p>
-          ) : (
-            <RankBarList
-              items={pluginRows.map((p) => ({
-                label: p.plugin_id,
-                value: p.count,
-              }))}
-              formatValue={(v) => v.toLocaleString("ko-KR")}
-              emptyMessage={
-                plugins.isLoading ? "불러오는 중…" : "플러그인 기록 없음"
-              }
-            />
-          )}
-        </section>
-      </div>
-
-      <p className="text-[11px] text-text-faint mt-5 pt-3 border-t border-hairline">
-        모델별 토큰은 집계 스키마에 model 차원이 없어 제외됨.
-      </p>
-    </Modal>
-  );
-}
 
 // =============================================================================
 // Sub-components
 // =============================================================================
-
-interface KpiHeroProps {
-  eyebrow: string;
-  value: string;
-  suffix?: string;
-  color: "azure" | "amber" | "lime" | "violet";
-  context?: React.ReactNode;
-  spark?: React.ReactNode;
-  rightAccessory?: React.ReactNode;
-}
-function KpiHero({
-  eyebrow,
-  value,
-  suffix,
-  color,
-  context,
-  spark,
-  rightAccessory,
-}: KpiHeroProps) {
-  const colorClass = {
-    azure: "text-azure",
-    amber: "text-amber",
-    lime: "text-lime",
-    violet: "text-violet",
-  }[color];
-  return (
-    <section className="mc-card col-span-3 relative">
-      <div className="text-[10.5px] font-bold tracking-[0.16em] uppercase text-text-tertiary whitespace-nowrap">
-        {eyebrow}
-      </div>
-      <div className="mt-3.5 flex items-baseline gap-2">
-        <span
-          className={`num text-[40px] font-medium leading-none tracking-[-0.02em] ${colorClass}`}
-        >
-          {value}
-        </span>
-        {suffix && (
-          <span className="text-[12px] text-text-secondary">{suffix}</span>
-        )}
-      </div>
-      {context && (
-        <div className="mt-2.5 flex items-center gap-1.5 flex-wrap text-[11.5px] text-text-secondary">
-          {context}
-        </div>
-      )}
-      {spark && (
-        <div className="absolute right-4 bottom-3 opacity-85 pointer-events-none">
-          {spark}
-        </div>
-      )}
-      {rightAccessory && (
-        <div className="absolute right-4 bottom-3 pointer-events-none">
-          {rightAccessory}
-        </div>
-      )}
-    </section>
-  );
-}
 
 function DotGrid({ count, max }: { count: number; max: number }) {
   const cells = Array.from({ length: max });

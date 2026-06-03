@@ -1,7 +1,7 @@
 {
   "name": "madup-token-monitor",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -17,7 +17,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "lint": "eslint src",
-    "format": "prettier --write src"
+    "format": "prettier --write src",
+    "test": "vitest run"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.2.8",
@@ -55,6 +56,7 @@
     "prettier": "^3.8.3",
     "tailwindcss": "^4.2.4",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^4.1.7"
   }
 }

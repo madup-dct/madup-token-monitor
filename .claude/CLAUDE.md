@@ -221,6 +221,34 @@ Leaderboard / Plugins (사내 집계 view)
 - **버전**: SemVer. `package.json` 과 `src-tauri/tauri.conf.json` 두 곳을 항상 동시에 갱신.
 - **커밋**: Conventional Commits (`feat`, `fix`, `chore`, ...). 본문에 "왜" + "어떻게".
 - **Co-Authored-By**: Claude 가 만든 커밋엔 footer 에 명시 (rules/team-workflow 와 일치).
+- **공유 컴포넌트 일관성 (No-Duplicate UI 규칙)** — 같은 시각/UX 의 컴포넌트는
+  한 곳에만 정의하고 모든 페이지에서 import. 새 페이지에서 비슷한 UI 가 필요해도
+  인라인으로 다시 만들지 말 것. 인라인을 발견하면 공유 컴포넌트로 마이그레이션:
+
+  | 용도 | 공유 컴포넌트 | 사용처 (현재) |
+  |---|---|---|
+  | KPI 카드 (eyebrow + 큰 숫자 + context) | `@/components/dashboard/KpiHero` | Dashboard, CompanyDashboard, UserDashboard, MyTeamPanel |
+  | 기간별 사용량 카드 (chart/list 토글 + Tokens/Cost + Copy + Legend) | `@/components/dashboard/PeriodChartCard` | Dashboard, UserDashboard |
+  | TOP 막대 순위 리스트 (랭크 글리프 + gradient 막대) | `@/components/ui/RankBarList` | Dashboard, UserDashboard, CompanyDashboard |
+  | 페이지넘김 carousel 카드 (헤더 회전 제목 + 화살표/점/자동토글) | `@/components/dashboard/CarouselCard` | Dashboard, UserDashboard |
+  | 차트 범례 (square / dot / line / dashed) | `@/components/ui/Legend` | Dashboard, PeriodChartCard |
+  | 2~4 옵션 inline 토글 | `@/components/ui/Segmented` | 전역 |
+  | 일자별 막대 차트 (SVG) | `@/components/charts/DailyBarChart` | PeriodChartCard 내부에서만 |
+  | 일자별 라인 차트 (SVG, 45+ pts) | `@/components/charts/DailyLineChart` | PeriodChartCard 내부에서만 (chartType auto 분기) |
+  | 리더보드 행 | `@/components/charts/Leaderboard` | CompanyDashboard, MyTeamPanel, TeamDashboardPanel |
+  | 팀 대시보드 (KPI + 멤버 리더보드 + 팀 MCP/플러그인 carousel) | `@/components/team/TeamDashboardPanel` | 팀 관리 드릴다운 (TeamManageList) |
+  | 전사 유저 테이블 (권한·팀·토큰 정렬/필터/검색, 행→상세) | `@/components/team/UserFilterTable` | AdminAnalytics (사용량 분석) |
+  | 사용자 리스트 모달 (엔터티→사용자 + 사용량, 행→상세) | `@/components/team/UserListModal` | AdminAnalytics (사용량 분석) |
+  | Carousel 3D 회전 primitive (저수준) | `@/components/ui/PrismCarousel` | CarouselCard 내부, CompanyDashboard·MyTeamPanel(리더보드 carousel) |
+  | Dropdown (single-select) | `@/components/ui/Select` | **모든 페이지** — native `<select>` 금지 |
+
+  - 다른 페이지에서 비슷한 컴포넌트가 필요하면 → **공유 컴포넌트의 prop 슬롯/variant 를 확장**.
+  - 한 페이지에서만 의미 있는 UI 라도, **두 번째 페이지에서 비슷하게 필요해지는 순간 추출**.
+  - 추출 시 위 표에 한 줄 추가.
+  - 시각이 미세하게 달라야 하면 prop (e.g. `colSpan`, `shape`) 으로 흡수. variant 가 5개 넘으면 그때 분리 고려.
+  - **자체 검증** — PR 직전:
+    - `grep -rn "function Kpi\|function Legend\|function Segmented" src/` — 인라인 컴포넌트 신규 정의 없는지
+    - `grep -rn '<select' src/` — native `<select>` 잔존 없는지 (전부 `Select` 컴포넌트여야 함)
 
 ## 9. AI 이어받기 시 우선 읽을 파일
 

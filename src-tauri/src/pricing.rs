@@ -163,4 +163,37 @@ mod tests {
         let expected = 0.3 + 3.75 + 6.0;
         assert!((cost - expected).abs() < 0.001, "cost={cost}");
     }
+
+    // 회귀: Opus 4.8 은 $5/$25 (Opus 4.5+ 세대). 단가표에 4-8 키가 없으면
+    // fallback 이 generic "claude-opus-4"($15/$75, 레거시 4.0/4.1)로 잡혀 3배 과대 계상됐다.
+    #[test]
+    fn test_calc_cost_opus_4_8_not_overcharged() {
+        // input 1M → $5 (NOT $15 from the legacy claude-opus-4 fallback)
+        let bare = calc_cost_usd("claude-opus-4-8", 1_000_000, 0, 0, 0, 0);
+        assert!((bare - 5.0).abs() < 0.001, "opus-4-8 bare cost={bare} (expected 5.0, not 15.0)");
+        // dated 변형도 starts_with 로 4-8 키(가장 긴 매칭)에 잡혀야 함
+        let dated = calc_cost_usd("claude-opus-4-8-20260515", 1_000_000, 1_000_000, 0, 0, 0);
+        assert!((dated - 30.0).abs() < 0.001, "opus-4-8 dated cost={dated} (expected 5+25=30, not 15+75=90)");
+    }
+
+    // 레거시 Opus 4.1 은 여전히 $15/$75 (명시 키 보존 확인)
+    #[test]
+    fn test_calc_cost_opus_4_1_legacy_price() {
+        let cost = calc_cost_usd("claude-opus-4-1", 1_000_000, 0, 0, 0, 0);
+        assert!((cost - 15.0).abs() < 0.001, "opus-4-1 cost={cost} (expected 15.0)");
+    }
+
+    // 재발 방지: generic "claude-opus-4" 기본값을 $5 로 내려, 단가표에 없는 미래 opus-4-N
+    // (4.9 등)이 $15 fallback 으로 과대 계상되지 않게 한다. 동시에 레거시 4.0 은 명시 키로 $15 보존.
+    #[test]
+    fn test_calc_cost_opus_generic_default_and_legacy_pins() {
+        // 미등록 미래 모델 → generic claude-opus-4 = $5 (옛 $15 아님)
+        let future = calc_cost_usd("claude-opus-4-9", 1_000_000, 0, 0, 0, 0);
+        assert!((future - 5.0).abs() < 0.001, "opus-4-9 cost={future} (expected 5.0, not 15.0)");
+        // 레거시 Opus 4.0 (dated id) 는 명시 핀으로 $15 유지
+        let legacy = calc_cost_usd("claude-opus-4-20250514", 1_000_000, 0, 0, 0, 0);
+        assert!((legacy - 15.0).abs() < 0.001, "opus-4.0 dated cost={legacy} (expected 15.0)");
+        let legacy0 = calc_cost_usd("claude-opus-4-0", 1_000_000, 0, 0, 0, 0);
+        assert!((legacy0 - 15.0).abs() < 0.001, "opus-4-0 cost={legacy0} (expected 15.0)");
+    }
 }

@@ -8,16 +8,16 @@ import {
   useOAuthUsage,
   useTopMcp,
   useTopPlugins,
+  useTopTools,
   refreshOAuthUsage,
 } from "@/hooks/useUsage";
-import { DailyBarChart } from "@/components/charts/DailyBarChart";
+import { PeriodChartCard } from "@/components/dashboard/PeriodChartCard";
+import { CarouselCard } from "@/components/dashboard/CarouselCard";
 import { HeatMap } from "@/components/HeatMap";
-import { PrismCarousel } from "@/components/ui/PrismCarousel";
 import { RankBarList } from "@/components/ui/RankBarList";
 import { MiniBarList } from "@/components/ui/MiniBarList";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { Sparkline } from "@/components/ui/Sparkline";
-import { Segmented } from "@/components/ui/Segmented";
 import { Select } from "@/components/ui/Select";
 import { QuotaSegBar, quotaSignalClass } from "@/components/ui/QuotaSegBar";
 import {
@@ -27,15 +27,19 @@ import {
   formatPercent,
   formatRelativeTime,
 } from "@/lib/format";
+import { pctDiff, priorDaysAverage, avgTokensPerActiveDay, projectedMinutesToLimit } from "@/lib/usage-math";
+import { prettyToolName } from "@/lib/labels";
 import type { Range, Point } from "@/types/models";
 
 const RANGES: { value: Range; label: string }[] = [
   { value: "7d", label: "dashboard.period.week" },
   { value: "30d", label: "dashboard.period.month" },
+  { value: "90d", label: "dashboard.period.quarter" },
 ];
 
-type Granularity = "daily" | "weekly" | "monthly";
+type Granularity = "hourly" | "daily" | "weekly" | "monthly";
 const GRANULARITIES: { value: Granularity; label: string }[] = [
+  { value: "hourly", label: "시간별" },
   { value: "daily", label: "일자별" },
   { value: "weekly", label: "주별" },
   { value: "monthly", label: "월별" },
@@ -44,6 +48,10 @@ const GRANULARITIES: { value: Granularity; label: string }[] = [
 function localDateKey(ts: number): string {
   const d = new Date(ts);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function hourKey(ts: number): string {
+  const d = new Date(ts);
+  return `${localDateKey(ts)} ${String(d.getHours()).padStart(2, "0")}:00`;
 }
 function weekStartKey(ts: number): string {
   const d = new Date(ts);
@@ -83,7 +91,13 @@ interface AggRow {
 
 function aggregateByPeriod(points: Point[], granularity: Granularity): AggRow[] {
   const keyFn =
-    granularity === "weekly" ? weekStartKey : granularity === "monthly" ? monthKey : localDateKey;
+    granularity === "hourly"
+      ? hourKey
+      : granularity === "weekly"
+        ? weekStartKey
+        : granularity === "monthly"
+          ? monthKey
+          : localDateKey;
   const map = new Map<string, { tokens: number; cost: number }>();
   for (const p of points) {
     const key = keyFn(p.ts);
@@ -97,11 +111,6 @@ function aggregateByPeriod(points: Point[], granularity: Granularity): AggRow[] 
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-function pctDiff(a: number, b: number): number {
-  if (b <= 0) return 0;
-  return (a - b) / b;
-}
-
 function todayLabel(): string {
   const d = new Date();
   const days = ["일", "월", "화", "수", "목", "금", "토"];
@@ -112,9 +121,25 @@ const DAILY_CARD_LIMIT: Partial<Record<Range, number>> = {
   "1d": 1,
   "7d": 7,
   "30d": 30,
+  "90d": 90,
 };
 
 const GAP_FILL_CAP = 400;
+
+/// 빈 시간을 0 으로 채움 — hourly: 오늘 00:00 ~ 현재 시각의 hour 까지 24 이하.
+function fillHourlyGaps(rows: AggRow[]): AggRow[] {
+  const now = new Date();
+  const endHour = now.getHours();
+  const map = new Map(rows.map((r) => [r.date, r]));
+  const out: AggRow[] = [];
+  for (let h = 0; h <= endHour; h++) {
+    const d = new Date(now);
+    d.setHours(h, 0, 0, 0);
+    const key = hourKey(d.getTime());
+    out.push(map.get(key) ?? { date: key, tokens: 0, cost: 0 });
+  }
+  return out;
+}
 
 /// 빈 날짜를 0 으로 채움 — daily: 오늘 기준 최근 `days` 일을 연속 생성.
 function fillDailyGaps(rows: AggRow[], days: number): AggRow[] {
@@ -188,13 +213,14 @@ export function Dashboard() {
   const { data: summary7 } = useSummary("7d");
   const { data: summary1 } = useSummary("1d");
   const { data: tsDaily } = useTimeseries(dailyRange);
+  // 시간별 뷰 전용 — 로컬 hourly 강제 (Supabase 일별 합산본은 ts=자정이라 00시 몰림 발생).
+  const { data: tsToday } = useTimeseries("1d", undefined, { preferLocal: true });
   const { data: tsMonth } = useTimeseries("30d");
   const { data: tsAll } = useTimeseries("all");
   const { data: heatmap } = useHeatmap(56);
   const { data: topMcp } = useTopMcp("7d");
   const { data: topPlugins } = useTopPlugins("7d");
-  const [activityIdx, setActivityIdx] = useState(0); // 0=히트맵 1=MCP 2=플러그인
-  const [activityAuto, setActivityAuto] = useState(true);
+  const { data: topTools } = useTopTools("7d");
   const { data: oauthResp } = useOAuthUsage();
   const oauthUsage = oauthResp?.data ?? null;
   const oauthError = oauthResp?.error ?? null;
@@ -243,6 +269,9 @@ export function Dashboard() {
   }, [dailyGranularity, availableMonths, availableYears, selectedMonth, selectedYear]);
 
   const dailyAggregated = useMemo<AggRow[]>(() => {
+    if (dailyGranularity === "hourly") {
+      return aggregateByPeriod(tsToday ?? [], "hourly");
+    }
     if (dailyGranularity === "daily") {
       return aggregateByPeriod(tsDaily ?? [], "daily");
     }
@@ -255,11 +284,14 @@ export function Dashboard() {
     return aggregateByPeriod(tsAll ?? [], "monthly").filter((m) =>
       m.date.startsWith(selectedYear + "-"),
     );
-  }, [dailyGranularity, tsDaily, tsAll, selectedMonth, selectedYear]);
+  }, [dailyGranularity, tsDaily, tsToday, tsAll, selectedMonth, selectedYear]);
 
   const dailyLimit = DAILY_CARD_LIMIT[dailyRange] ?? 30;
-  // 빈 날짜/주/월을 0 으로 채워 차트·리스트에서 누락 없이 연속 표시.
+  // 빈 시간/날짜/주/월을 0 으로 채워 차트·리스트에서 누락 없이 연속 표시.
   const dailyRows = useMemo<AggRow[]>(() => {
+    if (dailyGranularity === "hourly") {
+      return fillHourlyGaps(dailyAggregated);
+    }
     if (dailyGranularity === "daily") {
       return fillDailyGaps(dailyAggregated, dailyLimit);
     }
@@ -294,13 +326,18 @@ export function Dashboard() {
   const todayTokens = sumIO(summary1);
   const todayCache = sumCache(summary1);
   const todayCost = summary1.total_cost_usd;
-  const weekAvgDailyTokens = sumIO(summary7) / 7;
+  // 오늘을 제외한 직전 7일 일평균과 비교.
+  // range "7d" = midnight(today-7)~now 라 sumIO(summary7)은 오늘 + 직전 7일치 → priorDays=7.
+  // (평균에 오늘을 포함하면 자기참조로 희석됨)
+  const weekAvgDailyTokens = priorDaysAverage(sumIO(summary7), todayTokens, 7);
   const todayVsWeek = pctDiff(todayTokens, weekAvgDailyTokens);
   const todayMessages = summary1.message_count;
   const todaySessions = summary1.session_count;
 
   const fiveHour = oauthUsage?.five_hour ?? null;
   const sevenDay = oauthUsage?.seven_day ?? null;
+  const sevenDaySonnet = oauthUsage?.seven_day_sonnet ?? null;
+  const sevenDayOpus = oauthUsage?.seven_day_opus ?? null;
   const hasRealQuota = fiveHour !== null || sevenDay !== null;
   const sessionUsage = fiveHour
     ? Math.min(1, fiveHour.utilization / 100)
@@ -311,17 +348,38 @@ export function Dashboard() {
   const sessionResetMs = fiveHour
     ? Math.max(0, new Date(fiveHour.resets_at).getTime() - Date.now())
     : 1 * 3600_000 + 3 * 60_000;
+  // F1: 5h 한도 도달 예상 — OAuth util + resets_at 만으로 윈도우 평균 페이스 투영.
+  const FIVE_HOUR_MS = 5 * 3600_000;
+  const sessionElapsedMin = fiveHour
+    ? Math.max(0, (FIVE_HOUR_MS - sessionResetMs) / 60_000)
+    : 0;
+  const sessionProjMin = fiveHour
+    ? projectedMinutesToLimit(fiveHour.utilization, sessionElapsedMin)
+    : null;
+  // 리셋 전에 한도 소진이 예상될 때만 경고 (소진 예상 < 리셋까지 남은 시간).
+  const sessionLimitHint =
+    fiveHour && fiveHour.utilization >= 100
+      ? "한도 도달 — 리셋까지 대기"
+      : sessionProjMin !== null && sessionProjMin * 60_000 < sessionResetMs
+        ? `현재 페이스로 ~${formatRelativeTime(sessionProjMin * 60_000)} 후 소진`
+        : null;
   const weeklyResetMs = sevenDay
     ? Math.max(0, new Date(sevenDay.resets_at).getTime() - Date.now())
     : 1 * 86_400_000 + 14 * 3600_000 + 53 * 60_000;
   const monthlyUsage = Math.min(1, monthToDate.tokens / 15_000_000_000);
 
-  // 활동일 / 평균 일일 토큰 (최근 8주 = 56일)
+  // 활동일 (히트맵 56일 기준) — 히트맵 하단 stat 표시용
   const activeDays = (heatmap ?? []).filter((d) => d.count > 0).length;
-  const avgDailyTokens =
-    (heatmap ?? []).length > 0
-      ? sumIO(summary30) / Math.max(1, (heatmap ?? []).filter((d) => d.count > 0).length || 30)
-      : 0;
+  // 평균 일일 토큰 — 분자(30일 토큰)와 분모(최근 30일 활동일)를 같은 창으로 맞춤.
+  // 기존 버그: 30일 토큰을 56일 활동일로 나눠 과소 계산됨.
+  const cutoff30 = (() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - 29);
+    return localDateKey(d.getTime());
+  })();
+  const activeDays30 = (heatmap ?? []).filter((d) => d.count > 0 && d.date >= cutoff30).length;
+  const avgDailyTokens = avgTokensPerActiveDay(sumIO(summary30), activeDays30);
 
   const toolItems = summary7.by_source
     .map((s) => ({ label: s.source, value: s.cost_usd }))
@@ -538,12 +596,27 @@ export function Dashboard() {
             sub="(5h)"
             meta={`Resets in ${formatRelativeTime(sessionResetMs)}`}
             value={sessionUsage}
+            hint={sessionLimitHint}
           />
           <QuotaRow
             name="주간 한도"
             meta={`Resets in ${formatRelativeTime(weeklyResetMs)}`}
             value={weeklyUsage}
           />
+          {sevenDaySonnet && (
+            <QuotaRow
+              name="주간 · Sonnet"
+              meta={`Resets in ${formatRelativeTime(Math.max(0, new Date(sevenDaySonnet.resets_at).getTime() - Date.now()))}`}
+              value={Math.min(1, sevenDaySonnet.utilization / 100)}
+            />
+          )}
+          {sevenDayOpus && (
+            <QuotaRow
+              name="주간 · Opus"
+              meta={`Resets in ${formatRelativeTime(Math.max(0, new Date(sevenDayOpus.resets_at).getTime() - Date.now()))}`}
+              value={Math.min(1, sevenDayOpus.utilization / 100)}
+            />
+          )}
           <QuotaRow
             name="월간 누적"
             meta={`이번 달 ${new Date().getMonth() + 1}/1~`}
@@ -577,9 +650,9 @@ export function Dashboard() {
         </section>
 
         {/* ============ ROW 2: Daily breakdown (col-8) ============ */}
-        <section className="mc-card col-span-8">
-          <header className="flex items-center justify-between mb-3.5 gap-3 relative flex-wrap">
-            <div className="flex items-center gap-2">
+        <PeriodChartCard
+          leftHeader={
+            <>
               <span className="text-[15px] font-semibold text-text-primary tracking-[-0.005em]">
                 기간별 사용량
               </span>
@@ -589,7 +662,7 @@ export function Dashboard() {
                 options={GRANULARITIES}
                 ariaLabel="단위 선택"
               />
-              {dailyGranularity === "daily" ? (
+              {dailyGranularity === "hourly" ? null : dailyGranularity === "daily" ? (
                 <Select
                   value={dailyRange}
                   onChange={(v) => setDailyRange(v as Range)}
@@ -611,292 +684,114 @@ export function Dashboard() {
                   ariaLabel="년 선택"
                 />
               )}
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <Segmented
-                value={dailyMetric}
-                onChange={setDailyMetric}
-                options={[
-                  { value: "tokens", label: "Tokens" },
-                  { value: "cost", label: "Cost" },
-                ]}
-                ariaLabel="지표 선택"
-              />
-              <Segmented
-                value={dailyView}
-                onChange={setDailyView}
-                options={[
-                  { value: "chart", label: "Chart" },
-                  { value: "list", label: "List" },
-                ]}
-                ariaLabel="보기 전환"
-              />
-            </div>
-          </header>
-
-          <div
-            className="rounded-[10px] border border-hairline p-4"
-            style={{ background: "var(--color-surface-2)" }}
-          >
-            {dailyView === "chart" ? (
-              <DailyBarChart
-                data={dailyRows.map((d) => ({
-                  date:
-                    dailyGranularity === "weekly"
-                      ? weekLabel(d.date)
-                      : dailyGranularity === "monthly"
-                        ? monthLabel(d.date)
-                        : d.date.slice(5),
-                  tokens: d.tokens,
-                  cost: d.cost,
-                }))}
-                metric={dailyMetric}
-                highlightLast={dailyGranularity === "daily"}
-              />
-            ) : (
-              <div className="max-h-[280px] overflow-y-auto -mx-2">
-                {dailyRows.length === 0 ? (
-                  <p className="text-[12px] text-text-tertiary py-4 text-center">
-                    {t("dashboard.empty")}
-                  </p>
-                ) : (
-                  dailyRows.map((d, i) => {
-                    const v = dailyMetric === "tokens" ? d.tokens : d.cost;
-                    const empty = v === 0;
-                    return (
-                      <div
-                        key={d.date}
-                        className={`flex items-center justify-between px-2 py-2 ${
-                          i > 0 ? "border-t border-hairline" : ""
-                        } ${empty ? "opacity-50" : ""}`}
-                      >
-                        <span className="num text-[12px] text-text-secondary font-medium whitespace-nowrap">
-                          {dailyGranularity === "weekly"
-                            ? weekLabel(d.date)
-                            : dailyGranularity === "monthly"
-                              ? monthLabel(d.date)
-                              : d.date}
-                        </span>
-                        <div className="flex items-center gap-3 flex-1 ml-3">
-                          <div className="flex-1 h-1 bg-surface-3 rounded-full overflow-hidden">
-                            <div
-                              className="h-full rounded-full"
-                              style={{
-                                width: empty ? "0%" : `${Math.max(2, (v / Math.max(...dailyRows.map((x) => (dailyMetric === "tokens" ? x.tokens : x.cost)), 1)) * 100)}%`,
-                                background:
-                                  "linear-gradient(90deg, var(--color-azure-deep), var(--color-azure))",
-                              }}
-                            />
-                          </div>
-                          <span
-                            className={`num text-[13px] font-medium whitespace-nowrap ${empty ? "text-text-faint" : "text-azure"}`}
-                          >
-                            {empty
-                              ? "—"
-                              : dailyMetric === "tokens"
-                                ? formatTokensCompact(d.tokens)
-                                : formatUSD(d.cost)}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="flex justify-between items-center mt-3.5">
-            <div className="flex gap-3.5 text-[11px] text-text-tertiary">
-              <Legend swatch="var(--color-azure)" label="Tokens (입력+출력+캐시)" />
-              <Legend swatch="var(--color-violet)" label="오늘" />
-              <Legend
-                swatch="var(--color-amber)"
-                label="평균"
-                shape="line"
-              />
-            </div>
-            <button
-              onClick={copyDailyToClipboard}
-              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-hairline bg-surface-2 text-text-secondary text-[11.5px] font-medium hover:text-text-primary hover:border-hairline-strong transition-colors"
-            >
-              <svg
-                width="11"
-                height="11"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.6"
-              >
-                <rect x="2" y="2" width="9" height="9" rx="1" />
-                <path d="M5 5h6v6" />
-              </svg>
-              Copy
-            </button>
-          </div>
-        </section>
+            </>
+          }
+          rows={dailyRows}
+          metric={dailyMetric}
+          onMetricChange={setDailyMetric}
+          view={dailyView}
+          onViewChange={setDailyView}
+          highlightLast={dailyGranularity === "daily" || dailyGranularity === "hourly"}
+          chartType={dailyGranularity === "hourly" ? "line" : "auto"}
+          labelFormat={(r) =>
+            dailyGranularity === "hourly"
+              ? `${r.date.slice(11, 13)}시`
+              : dailyGranularity === "weekly"
+                ? weekLabel(r.date)
+                : dailyGranularity === "monthly"
+                  ? monthLabel(r.date)
+                  : r.date.slice(5)
+          }
+          onCopy={copyDailyToClipboard}
+          emptyText={t("dashboard.empty")}
+        />
 
         {/* ============ ROW 2: Activity carousel (col-4) ============ */}
-        <section className="mc-card col-span-4">
-          <header className="flex items-center justify-between mb-3.5 gap-3 relative">
-            <span className="text-[15px] font-semibold text-text-primary tracking-[-0.005em]">
-              {["활동", "MCP 사용량", "플러그인 사용량"][activityIdx]}{" "}
-              <span className="text-text-tertiary font-normal text-[12px] ml-1">
-                {activityIdx === 0 ? "최근 8주" : "최근 7일"}
-              </span>
-            </span>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                type="button"
-                onClick={() => setActivityIdx((i) => (i + 2) % 3)}
-                aria-label="이전"
-                title="이전"
-                className="mc-icon-btn"
-              >
-                <svg
-                  width="13"
-                  height="13"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M10 3L5 8l5 5" />
-                </svg>
-              </button>
-              <div className="flex items-center gap-1.5">
-                {[0, 1, 2].map((i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => setActivityIdx(i)}
-                    aria-label={["활동", "MCP", "플러그인"][i]}
-                    className="w-2 h-2 rounded-full transition-colors"
-                    style={{
-                      background:
-                        i === activityIdx
-                          ? "var(--color-azure)"
-                          : "var(--color-surface-3)",
-                    }}
-                  />
-                ))}
-              </div>
-              <button
-                type="button"
-                onClick={() => setActivityIdx((i) => (i + 1) % 3)}
-                aria-label="다음"
-                title="다음"
-                className="mc-icon-btn"
-              >
-                <svg
-                  width="13"
-                  height="13"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M6 3l5 5-5 5" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={activityAuto}
-                onClick={() => setActivityAuto((v) => !v)}
-                title="자동 넘기기"
-                className="relative w-[34px] h-[20px] rounded-full transition-colors shrink-0 ml-1"
-                style={{
-                  background: activityAuto
-                    ? "var(--color-azure)"
-                    : "var(--color-surface-3)",
-                }}
-              >
-                <span
-                  className="absolute top-[2px] left-[2px] w-4 h-4 rounded-full transition-transform"
-                  style={{
-                    background: activityAuto
-                      ? "#fff"
-                      : "var(--color-text-secondary)",
-                    transform: activityAuto
-                      ? "translateX(14px)"
-                      : "translateX(0)",
-                  }}
-                />
-              </button>
-            </div>
-          </header>
-
-          <PrismCarousel
-            activeIndex={activityIdx}
-            onIndexChange={setActivityIdx}
-            auto={activityAuto}
-            intervalMs={5000}
-            height={320}
-            faces={[
-              {
-                key: "heatmap",
-                node: (
-                  <div className="h-full">
-                    <HeatMap data={heatmap ?? []} weeks={8} />
-                    <div className="mt-5 pt-3.5 border-t border-hairline grid grid-cols-2 gap-3.5">
-                      <div>
-                        <div className="text-[10px] font-bold tracking-[0.14em] uppercase text-text-tertiary mb-1.5">
-                          평균 일일 토큰
-                        </div>
-                        <div className="num text-[20px] font-medium text-text-primary">
-                          {formatTokensCompact(avgDailyTokens)}
-                        </div>
+        <CarouselCard
+          className="col-span-4"
+          height={320}
+          faces={[
+            {
+              key: "heatmap",
+              title: "활동",
+              subtitle: "최근 8주",
+              node: (
+                <div className="h-full">
+                  <HeatMap data={heatmap ?? []} weeks={8} />
+                  <div className="mt-5 pt-3.5 border-t border-hairline grid grid-cols-2 gap-3.5">
+                    <div>
+                      <div className="text-[10px] font-bold tracking-[0.14em] uppercase text-text-tertiary mb-1.5">
+                        평균 일일 토큰
                       </div>
-                      <div>
-                        <div className="text-[10px] font-bold tracking-[0.14em] uppercase text-text-tertiary mb-1.5">
-                          활동일
-                        </div>
-                        <div className="num text-[20px] font-medium text-lime">
-                          {activeDays}/56
-                        </div>
+                      <div className="num text-[20px] font-medium text-text-primary">
+                        {formatTokensCompact(avgDailyTokens)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-bold tracking-[0.14em] uppercase text-text-tertiary mb-1.5">
+                        활동일
+                      </div>
+                      <div className="num text-[20px] font-medium text-lime">
+                        {activeDays}/56
                       </div>
                     </div>
                   </div>
-                ),
-              },
-              {
-                key: "mcp",
-                node: (
-                  <div className="h-full pr-1">
-                    <RankBarList
-                      items={(topMcp ?? []).map((m) => ({
-                        label: m.mcp_server,
-                        value: m.count,
-                      }))}
-                      formatValue={(v) => v.toLocaleString("ko-KR")}
-                      emptyMessage="MCP 사용 기록 없음 (최근 7일)"
-                    />
-                  </div>
-                ),
-              },
-              {
-                key: "plugins",
-                node: (
-                  <div className="h-full pr-1">
-                    <RankBarList
-                      items={(topPlugins ?? []).map((p) => ({
-                        label: p.plugin_id,
-                        value: p.count,
-                      }))}
-                      formatValue={(v) => v.toLocaleString("ko-KR")}
-                      emptyMessage="플러그인 사용 기록 없음 (최근 7일)"
-                    />
-                  </div>
-                ),
-              },
-            ]}
-          />
-        </section>
+                </div>
+              ),
+            },
+            {
+              key: "mcp",
+              title: "MCP 사용량",
+              subtitle: "최근 7일",
+              node: (
+                <div className="h-full pr-1">
+                  <RankBarList
+                    items={(topMcp ?? []).map((m) => ({
+                      label: m.mcp_server,
+                      value: m.count,
+                    }))}
+                    formatValue={(v) => v.toLocaleString("ko-KR")}
+                    emptyMessage="MCP 사용 기록 없음 (최근 7일)"
+                  />
+                </div>
+              ),
+            },
+            {
+              key: "plugins",
+              title: "플러그인 사용량",
+              subtitle: "최근 7일",
+              node: (
+                <div className="h-full pr-1">
+                  <RankBarList
+                    items={(topPlugins ?? []).map((p) => ({
+                      label: p.plugin_id,
+                      value: p.count,
+                    }))}
+                    formatValue={(v) => v.toLocaleString("ko-KR")}
+                    emptyMessage="플러그인 사용 기록 없음 (최근 7일)"
+                  />
+                </div>
+              ),
+            },
+            {
+              key: "tools",
+              title: "도구 사용량",
+              subtitle: "최근 7일",
+              node: (
+                <div className="h-full pr-1">
+                  <RankBarList
+                    items={(topTools ?? []).map((toolRow) => ({
+                      label: prettyToolName(toolRow.tool_name),
+                      value: toolRow.count,
+                    }))}
+                    formatValue={(v) => v.toLocaleString("ko-KR")}
+                    emptyMessage="도구 사용 기록 없음 (최근 7일)"
+                  />
+                </div>
+              ),
+            },
+          ]}
+        />
 
         {/* ============ ROW 3: 4 col-3 cards ============ */}
         <MiniStatCard
@@ -1049,8 +944,9 @@ interface QuotaRowProps {
   sub?: string;
   meta: string;
   value: number;
+  hint?: string | null;
 }
-function QuotaRow({ name, sub, meta, value }: QuotaRowProps) {
+function QuotaRow({ name, sub, meta, value, hint }: QuotaRowProps) {
   const pct = (value * 100).toFixed(1);
   return (
     <div className="mt-4 first:mt-1">
@@ -1071,6 +967,11 @@ function QuotaRow({ name, sub, meta, value }: QuotaRowProps) {
         </div>
       </div>
       <QuotaSegBar value={value} />
+      {hint ? (
+        // hint 는 항상 주의 메시지(조기 소진/한도 도달)이므로 amber 고정.
+        // (사용률 기반 색을 쓰면 낮은 사용률 초반 경고가 lime 으로 나와 의미 모순)
+        <div className="mt-1.5 text-[10.5px] font-medium text-amber">{hint}</div>
+      ) : null}
     </div>
   );
 }
@@ -1109,29 +1010,6 @@ function MiniStatCard({ eyebrow, value, suffix, subline, foot }: MiniStatProps) 
   );
 }
 
-interface LegendProps {
-  swatch: string;
-  label: string;
-  shape?: "square" | "line";
-}
-function Legend({ swatch, label, shape = "square" }: LegendProps) {
-  return (
-    <span className="flex items-center gap-1.5">
-      {shape === "square" ? (
-        <span
-          className="w-2 h-2 rounded-[2px]"
-          style={{ background: swatch }}
-        />
-      ) : (
-        <span
-          className="w-3.5 h-[1.5px] mt-px"
-          style={{ background: swatch }}
-        />
-      )}
-      {label}
-    </span>
-  );
-}
 
 // KpiCard import 사용처 없는 경우 빈 wrapper 임포트로 만들지 않게 leave-out:
 // (실제로 KpiCard 는 future use 를 위해 export 만 됨.)

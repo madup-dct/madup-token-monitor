@@ -1,4 +1,4 @@
-import type { Summary, Point, McpUsage, PluginUsage, DayCount, Range, LeaderboardEntry } from "@/types/models";
+import type { Summary, Point, McpUsage, PluginUsage, DayCount, Range, LeaderboardEntry, ToolUsage } from "@/types/models";
 
 function randomInt(min: number, max: number) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -85,6 +85,20 @@ export function buildMockTopPlugins(range: Range): PluginUsage[] {
     { plugin_id: "frontend-design", count: randomInt(10, 60) },
     { plugin_id: "ui-ux-pro-max", count: randomInt(5, 40) },
   ].map((p) => ({ ...p, count: Math.max(1, Math.round(p.count * days / 7)) }));
+}
+
+export function buildMockTopTools(range: Range): ToolUsage[] {
+  const days = rangeToDays(range);
+  return [
+    { tool_name: "Read", count: randomInt(200, 500) },
+    { tool_name: "Edit", count: randomInt(150, 400) },
+    { tool_name: "Bash", count: randomInt(120, 350) },
+    { tool_name: "Grep", count: randomInt(80, 250) },
+    { tool_name: "Write", count: randomInt(60, 200) },
+    { tool_name: "mcp__atlassian__jira_search", count: randomInt(30, 120) },
+    { tool_name: "TodoWrite", count: randomInt(20, 100) },
+    { tool_name: "mcp__playwright__browser_click", count: randomInt(10, 60) },
+  ].map((t) => ({ ...t, count: Math.max(1, Math.round((t.count * days) / 7)) }));
 }
 
 export function buildMockHeatmap(days = 30): DayCount[] {

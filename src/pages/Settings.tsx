@@ -11,7 +11,13 @@ import {
 import { supabase } from "../lib/supabase";
 import { syncAggregatesNow, type SyncResult } from "../lib/auth";
 import { useAuthUser } from "../hooks/useAuthUser";
+import { useRole } from "../hooks/useRole";
+import { assignAppRole, searchProfiles } from "../lib/teams";
 import { Avatar } from "../components/Avatar";
+import { TeamManagePanel } from "../components/team/TeamManagePanel";
+import { Select } from "../components/ui/Select";
+import { Modal } from "../components/ui/Modal";
+import type { AppRole } from "../types/models";
 
 const IS_TAURI = "__TAURI_INTERNALS__" in window;
 
@@ -64,6 +70,13 @@ function formatAbsolute(d: Date): string {
 export default function Settings() {
   const { user } = useAuthUser();
   const queryClient = useQueryClient();
+  // 캐시 비우기/데이터 삭제 — in-app 모달 (Tauri 팝오버에서 native confirm/alert 가
+  // 표시되지 않아 무반응처럼 보이는 문제를 피하려고 전부 모달로 처리).
+  const [confirmAction, setConfirmAction] = useState<null | "cache" | "delete">(null); // 실행 확인 모달
+  const [restartPrompt, setRestartPrompt] = useState<null | "cache" | "delete">(null); // 재시작 안내 모달
+  const [opError, setOpError] = useState<string | null>(null); // 작업 오류 모달
+  const isTeamLeader = useRole("team_leader");
+  const isManager = useRole("manager");
 
 
   // App behavior
@@ -193,48 +206,62 @@ export default function Settings() {
     await supabase.auth.signOut();
   }
 
-  async function handleClearCache() {
-    if (!IS_TAURI) return;
-    if (!confirm("캐시를 비우시겠습니까? 차트/쿼리 캐시만 비우고 SQLite 원본은 유지됩니다.")) return;
-    setClearing(true);
+  // 앱 캐시 키(madup-token-monitor:*)만 제거. Supabase 인증 세션(sb-*)은 보존 —
+  // localStorage.clear() 로 전부 지우면 로그아웃돼 /login 으로 튕기고 Settings 가 언마운트된다.
+  function clearAppCacheKeys() {
     try {
-      const bytes = await invoke<number>("clear_cache_dir");
-      // React Query persist 도 같이 비우기.
-      try {
-        localStorage.removeItem("madup-token-monitor:rq");
-      } catch {
-        /* ignore */
-      }
+      Object.keys(localStorage)
+        .filter((k) => k.startsWith("madup-token-monitor:"))
+        .forEach((k) => localStorage.removeItem(k));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function runClearCache() {
+    setConfirmAction(null);
+    if (!IS_TAURI) return;
+    setClearing(true);
+    setOpError(null);
+    try {
+      await invoke<number>("clear_cache_dir");
+      clearAppCacheKeys();
       queryClient.clear();
-      alert(`캐시 비움 완료. ${(bytes / 1024).toFixed(1)} KB 정리됨.`);
+      setRestartPrompt("cache");
     } catch (e) {
-      alert("캐시 비우기 실패: " + (e instanceof Error ? e.message : String(e)));
+      setOpError("캐시 비우기 실패: " + (e instanceof Error ? e.message : String(e)));
     } finally {
       setClearing(false);
     }
   }
 
-  async function handleDeleteAll() {
+  async function runDeleteAll() {
+    setConfirmAction(null);
     if (!IS_TAURI) return;
-    const ok = confirm(
-      "모든 로컬 데이터 (SQLite + 설정) 를 영구 삭제합니다.\n되돌릴 수 없습니다.\n앱 재시작 후 빈 상태로 시작됩니다.\n\n진행할까요?",
-    );
-    if (!ok) return;
-    const ok2 = confirm("정말 삭제할까요? 마지막 확인입니다.");
-    if (!ok2) return;
     setDeleting(true);
+    setOpError(null);
     try {
       await invoke("delete_all_data");
-      try {
-        localStorage.clear();
-      } catch {
-        /* ignore */
-      }
-      alert("삭제 완료. 앱을 재시작해주세요.");
+      clearAppCacheKeys();
+      queryClient.clear();
+      setRestartPrompt("delete");
     } catch (e) {
-      alert("삭제 실패: " + (e instanceof Error ? e.message : String(e)));
+      setOpError("삭제 실패: " + (e instanceof Error ? e.message : String(e)));
     } finally {
       setDeleting(false);
+    }
+  }
+
+  async function handleRestart() {
+    if (!IS_TAURI) {
+      setRestartPrompt(null);
+      return;
+    }
+    try {
+      await invoke("restart_app"); // 프로세스 종료 후 재실행 — 반환되지 않음
+    } catch (e) {
+      setRestartPrompt(null);
+      setOpError("재시작 실패: " + (e instanceof Error ? e.message : String(e)));
     }
   }
 
@@ -383,7 +410,8 @@ export default function Settings() {
               {syncResult && (
                 <p className="text-[11.5px] text-lime mt-2">
                   ✓ 동기화 완료 — 사용량 {syncResult.usage_rows}건 / MCP{" "}
-                  {syncResult.mcp_rows}건 / 플러그인 {syncResult.plugin_rows}건
+                  {syncResult.mcp_rows}건 / 플러그인 {syncResult.plugin_rows}건 / 시간별{" "}
+                  {syncResult.hourly_rows}건
                 </p>
               )}
               {syncError && (
@@ -463,6 +491,20 @@ export default function Settings() {
             </div>
           </div>
         </Card>
+
+        {/* ============ 05 · 팀 관리 (team_leader+) ============ */}
+        {isTeamLeader ? (
+          <Card num="05" eyebrow="팀" title="내 팀 관리">
+            <TeamManagePanel />
+          </Card>
+        ) : null}
+
+        {/* ============ 06 · 역할 관리 (manager+) ============ */}
+        {isManager ? (
+          <Card num="06" eyebrow="권한" title="사내 역할 부여">
+            <RoleManagementSection />
+          </Card>
+        ) : null}
 
         {/* ============ 04 · 앱 정보 ============ */}
         <Card num="04" eyebrow="앱 정보" title="버전 · 도움말">
@@ -566,20 +608,96 @@ export default function Settings() {
             label="로컬 캐시 초기화"
             description="차트 / 쿼리 캐시만 비웁니다. 원시 SQLite 데이터는 유지됩니다."
             buttonLabel={clearing ? "비우는 중…" : "캐시 비우기"}
-            onClick={handleClearCache}
+            onClick={() => setConfirmAction("cache")}
             disabled={clearing || !IS_TAURI}
             primary={false}
           />
           <DangerRow
             label="모든 로컬 데이터 삭제"
-            description="SQLite 파일과 settings.json 을 영구 삭제합니다. 되돌릴 수 없습니다."
+            description="로컬 캐시(SQLite)와 settings.json 을 삭제합니다. 재시작 시 로그에서 다시 집계됩니다."
             buttonLabel={deleting ? "삭제 중…" : "전체 삭제"}
-            onClick={handleDeleteAll}
+            onClick={() => setConfirmAction("delete")}
             disabled={deleting || !IS_TAURI}
             primary
           />
         </Card>
       </div>
+
+      {confirmAction && (
+        <Modal
+          open
+          onClose={() => setConfirmAction(null)}
+          title={confirmAction === "delete" ? "모든 로컬 데이터 삭제" : "로컬 캐시 비우기"}
+          maxWidth={420}
+        >
+          <p className="text-[13px] text-text-secondary leading-relaxed">
+            {confirmAction === "delete"
+              ? "로컬 캐시(SQLite)와 설정을 삭제합니다. 되돌릴 수 없습니다. 재시작하면 ~/.claude 로그에서 다시 집계됩니다 (최신 단가로 재계산). 원본 로그는 보존됩니다."
+              : "차트/쿼리 캐시를 비웁니다. 원시 SQLite 데이터는 유지됩니다."}
+          </p>
+          <div className="flex justify-end gap-2 mt-5">
+            <button
+              type="button"
+              onClick={() => setConfirmAction(null)}
+              className="h-9 px-4 rounded-md border border-hairline bg-surface-2 text-text-secondary text-[13px] font-medium hover:text-text-primary hover:border-hairline-strong transition-colors"
+            >
+              취소
+            </button>
+            <button
+              type="button"
+              onClick={confirmAction === "delete" ? runDeleteAll : runClearCache}
+              className="h-9 px-4 rounded-md text-[13px] font-semibold transition-colors"
+              style={
+                confirmAction === "delete"
+                  ? { background: "var(--color-coral)", color: "#fff" }
+                  : { background: "var(--color-azure)", color: "var(--color-text-on-accent)" }
+              }
+            >
+              {confirmAction === "delete" ? "삭제" : "비우기"}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {opError && (
+        <Modal open onClose={() => setOpError(null)} title="오류" maxWidth={380}>
+          <p className="text-[13px] text-coral leading-relaxed break-words">{opError}</p>
+          <div className="flex justify-end mt-5">
+            <button
+              type="button"
+              onClick={() => setOpError(null)}
+              className="h-9 px-4 rounded-md border border-hairline bg-surface-2 text-text-secondary text-[13px] font-medium hover:text-text-primary transition-colors"
+            >
+              닫기
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {restartPrompt && (
+        <Modal open onClose={() => setRestartPrompt(null)} title="앱 재시작" maxWidth={420}>
+          <p className="text-[13px] text-text-secondary leading-relaxed mb-1.5">
+            {restartPrompt === "delete"
+              ? "로컬 캐시를 삭제했습니다. 변경을 적용하려면 앱을 재시작하세요."
+              : "캐시를 비웠습니다. 일부 변경은 재시작 후 완전히 반영됩니다."}
+          </p>
+          <p className="text-[12px] text-text-tertiary leading-relaxed">
+            재시작하면 ~/.claude 로그에서 사용량을 다시 집계합니다 (최신 단가로 재계산). 원본 로그는 보존됩니다.
+          </p>
+          <div className="flex justify-end gap-2 mt-5">
+            <button
+              type="button"
+              onClick={() => setRestartPrompt(null)}
+              className="h-9 px-4 rounded-md border border-hairline bg-surface-2 text-text-secondary text-[13px] font-medium hover:text-text-primary hover:border-hairline-strong transition-colors"
+            >
+              나중에
+            </button>
+            <button type="button" onClick={handleRestart} className="mc-btn-primary">
+              지금 재시작
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -811,6 +929,136 @@ function DangerRow({
       >
         {buttonLabel}
       </button>
+    </div>
+  );
+}
+
+// =============================================================================
+// 역할 관리 (manager+) — 사내 유저 검색 + role 부여
+// =============================================================================
+const ROLE_OPTIONS: AppRole[] = ["user", "team_leader", "manager", "admin"];
+
+function RoleManagementSection() {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<
+    { id: string; slack_handle: string | null; name: string | null; email: string | null; avatar_url: string | null }[]
+  >([]);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  // 행별 Select 값. assign 직후 "" 로 리셋해서 같은 역할을 다시 부여하기 쉽게.
+  const [pendingRole, setPendingRole] = useState<Record<string, string>>({});
+
+  async function runSearch() {
+    setError(null);
+    setNotice(null);
+    try {
+      const rs = await searchProfiles(query);
+      setResults(rs);
+      if (rs.length === 0) setNotice("결과 없음");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function handleAssign(userId: string, role: AppRole) {
+    setBusyId(userId);
+    setError(null);
+    setNotice(null);
+    try {
+      await assignAppRole(userId, role);
+      setNotice(`완료: ${role}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-end gap-2">
+        <div className="flex flex-col gap-1 flex-1">
+          <label className="text-[11px] text-text-tertiary">
+            검색 — Slack 핸들 / 이메일 / 이름
+          </label>
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") runSearch();
+            }}
+            placeholder="예: dilee"
+            className="px-3 py-2 rounded-md bg-surface-1 border border-hairline text-[12px] text-text-primary"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={runSearch}
+          className="px-4 py-2 rounded-md bg-azure-bright text-[12px] font-semibold text-[#06122b]"
+        >
+          검색
+        </button>
+      </div>
+
+      {error ? (
+        <div className="text-[12px] text-rose-300 bg-rose-500/10 border border-rose-500/20 rounded-md px-3 py-2">
+          {error}
+        </div>
+      ) : null}
+      {notice ? (
+        <div className="text-[12px] text-text-tertiary">{notice}</div>
+      ) : null}
+
+      {results.length > 0 ? (
+        <ul className="flex flex-col gap-1">
+          {results.map((p) => (
+            <li
+              key={p.id}
+              className="flex items-center justify-between gap-3 px-3 py-2 rounded-md bg-surface-1 border border-hairline"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                {p.avatar_url ? (
+                  <img
+                    src={p.avatar_url}
+                    alt={p.name ?? p.email ?? ""}
+                    className="w-6 h-6 rounded-full object-cover"
+                  />
+                ) : (
+                  <div className="w-6 h-6 rounded-full bg-surface-2" />
+                )}
+                <div className="flex flex-col min-w-0">
+                  <span className="text-[12px] text-text-primary truncate">
+                    {p.slack_handle ?? p.name ?? p.email}
+                  </span>
+                  <span className="text-[10.5px] text-text-tertiary truncate">
+                    {p.email}
+                  </span>
+                </div>
+              </div>
+              <div
+                className={`flex items-center gap-2 shrink-0 ${busyId === p.id ? "opacity-50 pointer-events-none" : ""}`}
+              >
+                <Select
+                  value={pendingRole[p.id] ?? ""}
+                  onChange={async (v) => {
+                    if (!v) return;
+                    setPendingRole((m) => ({ ...m, [p.id]: v }));
+                    await handleAssign(p.id, v as AppRole);
+                    setPendingRole((m) => ({ ...m, [p.id]: "" }));
+                  }}
+                  options={[
+                    { value: "", label: "역할 선택…" },
+                    ...ROLE_OPTIONS.map((r) => ({ value: r, label: r })),
+                  ]}
+                  ariaLabel={`${p.name ?? p.email ?? p.id} 역할 부여`}
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }

@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>madup-token-monitor — AWS 아키텍처 설계도 (최소 구성)</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a212b;
+    --panel-2: #222b37;
+    --ink: #e8edf2;
+    --muted: #97a3b4;
+    --hairline: #2d3742;
+    --aws: #ff9900;
+    --client: #6ea8fe;
+    --auth: #f06292;
+    --api: #ba68c8;
+    --data: #4db6ac;
+    --aux: #90a4ae;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard",
+                 "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+    line-height: 1.5;
+    padding: 40px 24px 80px;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+  header.page { margin-bottom: 32px; }
+  .eyebrow {
+    text-transform: uppercase; letter-spacing: .14em; font-size: 11px;
+    color: var(--aws); font-weight: 700; margin: 0 0 8px;
+  }
+  h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -.02em; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0; }
+  .tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+  .tag {
+    font-size: 12px; padding: 4px 10px; border-radius: 999px;
+    background: var(--panel-2); border: 1px solid var(--hairline); color: var(--muted);
+  }
+  .tag b { color: var(--ink); font-weight: 600; }
+
+  section { margin-top: 40px; }
+  h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--muted); margin: 0 0 16px; font-weight: 700;
+    border-bottom: 1px solid var(--hairline); padding-bottom: 8px;
+  }
+
+  .layer {
+    background: var(--panel);
+    border: 1px solid var(--hairline);
+    border-radius: 14px;
+    padding: 16px 18px;
+    position: relative;
+  }
+  .layer-label {
+    position: absolute; top: 50%; left: -12px; transform: translateY(-50%) rotate(180deg);
+    writing-mode: vertical-rl; font-size: 10px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--muted); font-weight: 700;
+  }
+  .layer-head {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--muted); font-weight: 700; margin: 0 0 12px;
+  }
+  .nodes { display: flex; flex-wrap: wrap; gap: 12px; }
+  .node {
+    flex: 1 1 200px; min-width: 180px;
+    background: var(--panel-2); border: 1px solid var(--hairline);
+    border-radius: 10px; padding: 12px 14px; position: relative;
+    border-left: 3px solid var(--aux);
+  }
+  .node .svc { font-size: 10px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+  .node .name { font-size: 15px; font-weight: 700; margin: 2px 0 4px; }
+  .node .desc { font-size: 12.5px; color: var(--muted); }
+  .node.client { border-left-color: var(--client); }
+  .node.api    { border-left-color: var(--api); }
+  .node.data   { border-left-color: var(--data); }
+  .node.aux    { border-left-color: var(--aux); }
+
+  .arrow-row {
+    display: flex; justify-content: center; align-items: center;
+    gap: 10px; padding: 10px 0; color: var(--muted); font-size: 12px;
+  }
+  .arrow-row .line { color: var(--aws); font-size: 18px; line-height: 1; }
+  .arrow-row .lbl {
+    background: var(--panel-2); border: 1px solid var(--hairline);
+    border-radius: 999px; padding: 3px 12px; font-size: 11.5px;
+  }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 820px) { .grid2 { grid-template-columns: 1fr; } }
+
+  .flow {
+    background: var(--panel); border: 1px solid var(--hairline);
+    border-radius: 14px; padding: 18px;
+  }
+  .flow h3 { margin: 0 0 14px; font-size: 15px; }
+  .flow h3 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; vertical-align: middle; }
+  .step { display: flex; gap: 12px; padding: 7px 0; font-size: 13px; align-items: flex-start; }
+  .step .num {
+    flex: 0 0 22px; height: 22px; border-radius: 6px; background: var(--panel-2);
+    border: 1px solid var(--hairline); font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; color: var(--aws);
+  }
+  .step .txt { color: var(--ink); }
+  .step .txt code {
+    background: #0c1118; border: 1px solid var(--hairline); border-radius: 5px;
+    padding: 1px 6px; font-size: 12px; color: var(--client);
+  }
+  .step .txt .svc { color: var(--muted); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--hairline); }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  td code { background: #0c1118; border: 1px solid var(--hairline); border-radius: 5px; padding: 1px 6px; font-size: 12px; color: var(--data); }
+  td .role { color: var(--aws); font-weight: 600; }
+
+  .cost {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+  }
+  .cost .card {
+    background: var(--panel); border: 1px solid var(--hairline);
+    border-radius: 12px; padding: 14px;
+  }
+  .cost .svc { font-size: 12px; color: var(--muted); }
+  .cost .amt { font-size: 20px; font-weight: 700; margin-top: 4px; }
+  .cost .amt small { font-size: 12px; color: var(--muted); font-weight: 500; }
+  .cost .total { border-color: var(--aws); }
+  .cost .total .amt { color: var(--aws); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 18px; }
+  .legend .item { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+  .legend .sw { width: 12px; height: 12px; border-radius: 3px; }
+
+  .notes { font-size: 12.5px; color: var(--muted); }
+  .notes li { margin-bottom: 6px; }
+  .notes b { color: var(--ink); }
+  .danger { color: #ff8a8a; }
+
+  footer.page { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--hairline); font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="page">
+    <p class="eyebrow">Infrastructure Migration · Supabase → AWS (minimal)</p>
+    <h1>madup-token-monitor — AWS 최소 구성</h1>
+    <p class="sub">AppSync + Aurora + CloudFront/S3 · Lambda·Cognito 없음 · Slack OIDC 직결 · DB는 private · 비용 최적화</p>
+    <div class="tags">
+      <span class="tag">리전 <b>ap-northeast-2 (서울)</b></span>
+      <span class="tag">유저 <b>500 MAU</b></span>
+      <span class="tag">인증 <b>Slack OIDC → AppSync authorizer</b></span>
+      <span class="tag">resolver <b>JS/VTL + RDS Data API</b></span>
+      <span class="tag">DB <b>private · 인바운드 0개방</b></span>
+      <span class="tag">예상 비용 <b>$55–125 / 월</b></span>
+    </div>
+  </header>
+
+  <section>
+    <h2>전체 구성 (레이어드 뷰)</h2>
+    <div class="legend">
+      <span class="item"><span class="sw" style="background:var(--client)"></span>클라이언트</span>
+      <span class="item"><span class="sw" style="background:var(--api)"></span>API / 인증 / 실시간</span>
+      <span class="item"><span class="sw" style="background:var(--data)"></span>데이터</span>
+      <span class="item"><span class="sw" style="background:var(--aux)"></span>정적 / 외부</span>
+    </div>
+
+    <!-- Layer 1: client -->
+    <div class="layer">
+      <span class="layer-label">Client</span>
+      <p class="layer-head">로컬 디바이스 (macOS / Windows)</p>
+      <div class="nodes">
+        <div class="node client">
+          <div class="svc">Tauri 2 · React 19</div>
+          <div class="name">데스크톱 앱</div>
+          <div class="desc">메뉴바 팝오버. 원시 로그/프롬프트는 디바이스를 떠나지 않음. Slack 로그인으로 OIDC 토큰 획득.</div>
+        </div>
+        <div class="node client">
+          <div class="svc">SQLite (rusqlite)</div>
+          <div class="name">로컬 DB</div>
+          <div class="desc">jsonl 파서 → 분 단위 raw 보관(로컬 전용). 서버엔 시간 단위만 업로드.</div>
+        </div>
+        <div class="node aux">
+          <div class="svc">외부 (AWS 밖)</div>
+          <div class="name">Slack — OIDC provider</div>
+          <div class="desc">"Sign in with Slack". 발급한 JWT가 곧 API 접근 서명. AppSync가 직접 검증.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-row">
+      <span class="lbl">HTTPS · GraphQL (query/mutation)</span>
+      <span class="line">↓↑</span>
+      <span class="lbl">WSS · Subscription (실시간)</span>
+      <span class="lbl">+ Slack OIDC 토큰</span>
+    </div>
+
+    <!-- Layer 2: api -->
+    <div class="layer">
+      <span class="layer-label">API</span>
+      <p class="layer-head">API · 인증 · 실시간 (단일 진입점)</p>
+      <div class="nodes">
+        <div class="node api">
+          <div class="svc">AWS AppSync</div>
+          <div class="name">GraphQL API + 구독</div>
+          <div class="desc">query·mutation·subscription. WebSocket 연결을 매니지드로 유지(Realtime 대체).</div>
+        </div>
+        <div class="node api">
+          <div class="svc">AppSync · OPENID_CONNECT</div>
+          <div class="name">Slack OIDC authorizer</div>
+          <div class="desc">Slack JWKS로 토큰 직접 검증. Cognito 불필요. <code style="color:var(--client)">$ctx.identity.claims.sub</code> 로 사용자 식별.</div>
+        </div>
+        <div class="node api">
+          <div class="svc">AppSync · JS/VTL resolver</div>
+          <div class="name">RDS Data API resolver</div>
+          <div class="desc">Lambda 없이 resolver가 Aurora에 직접 SQL 실행. 권한 체크도 resolver에서.</div>
+        </div>
+        <div class="node aux">
+          <div class="svc">CloudFront + S3</div>
+          <div class="name">정적 호스팅</div>
+          <div class="desc">OAuth auth-callback 페이지(현 GitHub Pages 대체).</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-row">
+      <span class="lbl">RDS Data API (IAM, NAT 불필요)</span>
+      <span class="line">↓</span>
+      <span class="lbl">SQL — DB는 private</span>
+    </div>
+
+    <!-- Layer 3: data -->
+    <div class="layer">
+      <span class="layer-label">Data</span>
+      <p class="layer-head">데이터 (VPC private subnet)</p>
+      <div class="nodes">
+        <div class="node data">
+          <div class="svc">Aurora Serverless v2</div>
+          <div class="name">PostgreSQL</div>
+          <div class="desc">시간 집계·팀·권한·채팅 테이블. 평균 0.5–1 ACU, 야간/주말 scale-down.
+            <b class="danger">인바운드 0개방</b> — 인터넷 노출 없음, Data API(IAM)로만 접근.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>핵심 데이터 흐름</h2>
+    <div class="grid2">
+      <div class="flow">
+        <h3><span class="dot" style="background:var(--data)"></span>시간 단위 사용량 집계 업로드</h3>
+        <div class="step"><span class="num">1</span><span class="txt">로컬 watcher가 <code>~/.claude/**/*.jsonl</code> 등 파싱 → SQLite에 분 단위 raw 적재</span></div>
+        <div class="step"><span class="num">2</span><span class="txt">옵트인 사용자에 한해 1시간 주기로 <b>시간 단위</b>로 집계 (분 단위는 로컬에만 유지)</span></div>
+        <div class="step"><span class="num">3</span><span class="txt"><span class="svc">AppSync</span> <code>mutation upsertHourlyUsage</code> 호출 (Slack OIDC 토큰 첨부)</span></div>
+        <div class="step"><span class="num">4</span><span class="txt"><span class="svc">resolver</span>(JS/VTL)가 <code>$ctx.identity.claims.sub</code> 검증 후 Aurora에 직접 upsert</span></div>
+        <div class="step"><span class="num">5</span><span class="txt">리더보드는 <code>query getTopUsers</code> → resolver가 집계 SQL 실행 (Lambda 없음)</span></div>
+      </div>
+      <div class="flow">
+        <h3><span class="dot" style="background:var(--api)"></span>채팅 (실시간)</h3>
+        <div class="step"><span class="num">1</span><span class="txt">앱이 <code>subscription onMessage(teamId)</code> 구독 → <span class="svc">AppSync</span>가 WSS 연결 유지</span></div>
+        <div class="step"><span class="num">2</span><span class="txt">전송 시 <code>mutation sendMessage</code> 호출</span></div>
+        <div class="step"><span class="num">3</span><span class="txt"><span class="svc">resolver</span>가 권한 확인(team_members) 후 메시지 저장</span></div>
+        <div class="step"><span class="num">4</span><span class="txt"><span class="svc">AppSync</span>가 같은 팀 구독자 전원에게 자동 push</span></div>
+        <div class="step"><span class="num">5</span><span class="txt">연결 유지·fan-out은 전부 AppSync 담당 → 상시 서버 불필요</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>권한 모델 — DB 테이블 + resolver 집행 (RLS 대체)</h2>
+    <table>
+      <thead>
+        <tr><th>테이블</th><th>주요 컬럼</th><th>역할</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>teams</code></td><td>id, name, created_at</td><td>팀 정의</td></tr>
+        <tr><td><code>team_members</code></td><td>team_id, user_id, <span class="role">role</span></td><td>멤버십 — role: owner / member</td></tr>
+        <tr><td><code>app_roles</code></td><td>user_id, <span class="role">role</span></td><td>전역 역할 — admin / user</td></tr>
+        <tr><td><code>hourly_usage</code></td><td>user_id, hour, tool, model, tokens, cost_usd</td><td>시간 단위 집계 (UNIQUE 키로 dedup)</td></tr>
+        <tr><td><code>messages</code></td><td>id, team_id, user_id, body, created_at</td><td>채팅 메시지</td></tr>
+      </tbody>
+    </table>
+    <p class="notes" style="margin-top:14px;">
+      권한 <b>데이터</b>는 위 테이블에 저장하고, 권한 <b>집행</b>은 AppSync resolver(JS/VTL)에서 수행:
+      <code style="color:var(--client)">Slack OIDC sub → team_members/app_roles 조회 → 허용된 행만 반환</code>.
+      클라이언트가 DB에 직접 붙지 않으므로(앱→AppSync→Data API→DB) RLS 없이도 안전하고, <b>DB는 인터넷에 노출되지 않습니다.</b>
+    </p>
+  </section>
+
+  <section>
+    <h2>월 비용 추정 (서울 리전, 2025–26 근사)</h2>
+    <div class="cost">
+      <div class="card"><div class="svc">Slack OIDC</div><div class="amt">$0 <small>외부 · 무료</small></div></div>
+      <div class="card"><div class="svc">AppSync</div><div class="amt">$5–15 <small>쿼리+구독</small></div></div>
+      <div class="card"><div class="svc">Aurora Serverless v2</div><div class="amt">$50–100 <small>0.5–1 ACU</small></div></div>
+      <div class="card"><div class="svc">Aurora 스토리지/IO</div><div class="amt">$2–5 <small>&lt;15GB</small></div></div>
+      <div class="card"><div class="svc">CloudFront + S3</div><div class="amt">$1–5 <small>정적</small></div></div>
+      <div class="card total"><div class="svc">합계</div><div class="amt">$55–125 <small>/ 월 (약 8–17만원)</small></div></div>
+    </div>
+    <ul class="notes" style="margin-top:18px;">
+      <li><b>Lambda·Cognito·CloudWatch 제거:</b> AppSync resolver(JS/VTL) + Slack OIDC authorizer로 컴포넌트를 4개로 축소. 운영·비용 모두 단순화.</li>
+      <li><b>NAT Gateway 회피:</b> RDS Data API(IAM)로 접근하므로 Lambda/리졸버를 VPC에 넣을 필요 없음 → NAT($32+/월) 제거.</li>
+      <li><b>DB는 private 유지:</b> 인바운드 0개방. 클라이언트가 DB에 직접 붙지 않아 인터넷 노출이 불필요(0.0.0.0 개방 금지).</li>
+      <li><b>resolver 한계 주의:</b> 복잡한 권한/트랜잭션 로직은 JS/VTL resolver로 표현이 빡빡할 수 있음. 그 경우 해당 부분만 Lambda resolver로 선택적 도입 가능.</li>
+      <li><b>운영 로그(CloudWatch):</b> 현재 구성에서 제외. 장애 추적이 필요해지면 AppSync 로깅만 선택적으로 켜는 것을 권장.</li>
+    </ul>
+  </section>
+
+  <footer class="page">
+    가정: 시간 단위 집계만 서버 보관(분 단위는 로컬), 옵트인 500명, AWS 매니지드 전용, 비용 최적화 우선.
+    단가는 서울 리전 근사치이며 실제 사용량/트래픽에 따라 변동. · 생성일 2026-05-22
+  </footer>
+
+</div>
+</body>
+</html>

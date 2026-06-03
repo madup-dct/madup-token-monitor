@@ -4,7 +4,7 @@
 // 전제조건: 호출자가 share_consent=true임을 확인한 뒤에만 호출.
 // user_id는 호출자가 인증된 Supabase 세션의 auth.uid()를 넘김 — RLS WITH CHECK 통과용.
 
-use chrono::{Local, TimeZone};
+use chrono::{Local, TimeZone, Utc};
 use serde::Serialize;
 
 use crate::db;
@@ -38,12 +38,46 @@ struct PluginUsageRow {
     count: i64,
 }
 
+/// tool_usage row — tool_name 별 일별 호출 수.
+#[derive(Debug, Serialize)]
+struct ToolUsageRow {
+    user_id: String,
+    date: String,
+    tool_name: String,
+    count: i64,
+}
+
+/// usage_hourly row 형태 — UTC 정시(hour) 버킷. (user_id, hour_utc, source, model) PK.
+#[derive(Debug, Serialize)]
+struct HourlyRow {
+    user_id: String,
+    hour_utc: String,
+    source: String,
+    model: String,
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_read: i64,
+    cache_write: i64,
+    cost_usd: f64,
+    request_count: i64,
+}
+
 /// unix_ms timestamp을 local timezone YYYY-MM-DD 문자열로.
 /// 로컬 일자 기준이라야 한국 사용자가 인식하는 "5/9 작업"이 정확히 5/9에 들어감.
 fn local_date_string(ts_ms: i64) -> Option<String> {
     let secs = ts_ms / 1000;
     let nanos = ((ts_ms % 1000) * 1_000_000) as u32;
     Local.timestamp_opt(secs, nanos).single().map(|dt| dt.format("%Y-%m-%d").to_string())
+}
+
+/// unix_ms 를 UTC 정시(hour) 버킷 RFC3339 문자열로 (예: "2026-06-02T08:00:00Z").
+/// timestamptz 컬럼이 그대로 파싱. 분/초는 0 으로 절삭.
+fn utc_hour_string(ts_ms: i64) -> Option<String> {
+    let secs = ts_ms / 1000;
+    let hour_secs = secs - secs.rem_euclid(3600);
+    Utc.timestamp_opt(hour_secs, 0)
+        .single()
+        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
 }
 
 fn read_usage_aggregates(user_id: &str) -> Result<Vec<UsageAggregate>, String> {
@@ -155,6 +189,106 @@ fn read_tool_calls(user_id: &str) -> Result<(Vec<McpUsageRow>, Vec<PluginUsageRo
     Ok((mcp_rows, plugin_rows))
 }
 
+/// usage_events 를 UTC 정시 버킷으로 합산해 usage_hourly 행 생성.
+/// 최근 30일만 — 시간별 뷰는 최근만 의미 있고, 전체 기간이면 row 수가 폭증한다
+/// (daily 의 24배). 일별 합계(read_usage_aggregates)는 전체 기간 그대로 올린다.
+fn read_usage_hourly(user_id: &str) -> Result<Vec<HourlyRow>, String> {
+    let conn = db::open().map_err(|e| e.to_string())?;
+    let cutoff_ms = Utc::now().timestamp_millis() - 30 * 86_400_000;
+    let mut stmt = conn
+        .prepare(
+            "SELECT ts, source, model, input_tokens, output_tokens,
+                    cache_read, cache_write, cost_usd
+             FROM usage_events WHERE ts >= ?1",
+        )
+        .map_err(|e| e.to_string())?;
+
+    use std::collections::HashMap;
+    // (hour_utc, source, model) → (input, output, cache_read, cache_write, cost, count)
+    let mut acc: HashMap<(String, String, String), (i64, i64, i64, i64, f64, i64)> = HashMap::new();
+    let rows = stmt
+        .query_map([cutoff_ms], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+                row.get::<_, Option<i64>>(6)?,
+                row.get::<_, Option<f64>>(7)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    for r in rows.flatten() {
+        let (ts, source, model, inp, out, cr, cw, cost) = r;
+        let Some(hour) = utc_hour_string(ts) else { continue };
+        let entry = acc
+            .entry((hour, source, model.unwrap_or_default()))
+            .or_insert((0, 0, 0, 0, 0.0, 0));
+        entry.0 += inp.unwrap_or(0);
+        entry.1 += out.unwrap_or(0);
+        entry.2 += cr.unwrap_or(0);
+        entry.3 += cw.unwrap_or(0);
+        entry.4 += cost.unwrap_or(0.0);
+        entry.5 += 1;
+    }
+
+    Ok(acc
+        .into_iter()
+        .map(
+            |((hour_utc, source, model), (inp, out, cr, cw, cost, count))| HourlyRow {
+                user_id: user_id.to_string(),
+                hour_utc,
+                source,
+                model,
+                input_tokens: inp,
+                output_tokens: out,
+                cache_read: cr,
+                cache_write: cw,
+                cost_usd: cost,
+                request_count: count,
+            },
+        )
+        .collect())
+}
+
+/// tool_calls 의 tool_name 을 (date, tool_name) 별로 카운트.
+fn read_tool_usage(user_id: &str) -> Result<Vec<ToolUsageRow>, String> {
+    let conn = db::open().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT ts, tool_name FROM tool_calls
+             WHERE tool_name IS NOT NULL AND tool_name <> ''",
+        )
+        .map_err(|e| e.to_string())?;
+
+    use std::collections::HashMap;
+    let mut acc: HashMap<(String, String), i64> = HashMap::new();
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?;
+    for r in rows.flatten() {
+        let (ts, tool_name) = r;
+        if let Some(date) = local_date_string(ts) {
+            *acc.entry((date, tool_name)).or_insert(0) += 1;
+        }
+    }
+
+    Ok(acc
+        .into_iter()
+        .map(|((date, tool_name), count)| ToolUsageRow {
+            user_id: user_id.to_string(),
+            date,
+            tool_name,
+            count,
+        })
+        .collect())
+}
+
 fn upsert<T: Serialize>(
     supabase_url: &str,
     publishable_key: &str,
@@ -197,6 +331,8 @@ pub struct SyncResult {
     pub usage_rows: usize,
     pub mcp_rows: usize,
     pub plugin_rows: usize,
+    pub hourly_rows: usize,
+    pub tool_rows: usize,
 }
 
 /// Tauri command: 즉시 집계 동기화.
@@ -212,6 +348,8 @@ pub async fn sync_aggregates_now(
 ) -> Result<SyncResult, String> {
     let usage = read_usage_aggregates(&user_id)?;
     let (mcp, plugins) = read_tool_calls(&user_id)?;
+    let hourly = read_usage_hourly(&user_id)?;
+    let tools = read_tool_usage(&user_id)?;
 
     let usage_n = upsert(
         &supabase_url,
@@ -237,10 +375,28 @@ pub async fn sync_aggregates_now(
         &plugins,
         "user_id,date,plugin_id",
     )?;
+    let hourly_n = upsert(
+        &supabase_url,
+        &publishable_key,
+        &access_token,
+        "usage_hourly",
+        &hourly,
+        "user_id,hour_utc,source,model",
+    )?;
+    let tool_n = upsert(
+        &supabase_url,
+        &publishable_key,
+        &access_token,
+        "tool_usage",
+        &tools,
+        "user_id,date,tool_name",
+    )?;
 
     Ok(SyncResult {
         usage_rows: usage_n,
         mcp_rows: mcp_n,
         plugin_rows: plugin_n,
+        hourly_rows: hourly_n,
+        tool_rows: tool_n,
     })
 }

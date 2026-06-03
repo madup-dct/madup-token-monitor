@@ -93,3 +93,11 @@ pub struct DayCount {
     pub count: i64,
     pub cost_usd: f64,
 }
+
+/// 도구(tool_name) 별 호출 횟수 — "주 사용 tools" 관찰용.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolUsage {
+    pub tool_name: String,
+    pub count: i64,
+}
+
