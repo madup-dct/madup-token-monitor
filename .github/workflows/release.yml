@@ -9,23 +9,55 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  # ────────────────────────────────────────────────────────────────────────────
+  # 1) 드래프트 릴리즈 먼저 생성 — 매트릭스가 "병렬로" 같은 릴리즈에 업로드하도록
+  #    release_id 를 전달. (병렬 시 발생하던 draft 동시 생성 race 차단)
+  # ────────────────────────────────────────────────────────────────────────────
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.result }}
+    steps:
+      - uses: actions/github-script@v7
+        id: create
+        with:
+          script: |
+            const tag = context.ref.replace('refs/tags/', '');
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `매드업 토큰 모니터 ${tag}`,
+              body: [
+                '## 변경 사항',
+                'GitHub Releases에서 자동 업데이트가 지원됩니다.',
+                '',
+                '### 설치',
+                '- macOS (Apple Silicon): `*_aarch64.dmg`',
+                '- macOS (Intel): `*_x64.dmg`',
+                '- Windows (x64): `*-setup.exe` (SmartScreen: 추가 정보 → 실행) — ⚠️ BETA: 로그인 미검증',
+              ].join('\n'),
+              draft: true,
+              prerelease: false,
+            });
+            return data.id;
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # 2) 플랫폼별 빌드 — "병렬" 실행. latest.json 은 건드리지 않는다
+  #    (includeUpdaterJson: false) → read-modify-write race 없음. .sig 는 그대로 업로드.
+  # ────────────────────────────────────────────────────────────────────────────
+  build:
+    needs: create-release
     strategy:
       fail-fast: false
-      # max-parallel: 1 — macOS·Windows job 이 동일 draft release 의 latest.json 을
-      # 비원자적으로 read-modify-write 하므로, 직렬 실행해 플랫폼 키 누락(race) 을 차단.
-      max-parallel: 1
       matrix:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_suffix: aarch64-apple-darwin
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact_suffix: x86_64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_suffix: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
 
@@ -60,16 +92,12 @@ jobs:
       - name: Write .env (vite inline)
         # tauri-action 이 sub-process 에 env forwarding 을 일부 누락하는 케이스 우회.
         # vite 가 .env 파일을 직접 읽어 import.meta.env 로 inline 하도록 명시 작성.
-        # shell: bash — windows-latest 기본 셸(PowerShell) 에서 POSIX heredoc/${#VAR}/[ -z ] 깨짐 방지.
         env:
           URL: ${{ secrets.VITE_SUPABASE_URL }}
           KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
           SUCCESS_URL: ${{ secrets.VITE_AUTH_SUCCESS_URL }}
         shell: bash
         run: |
-          echo "URL length: ${#URL}"
-          echo "KEY length: ${#KEY}"
-          echo "SUCCESS_URL length: ${#SUCCESS_URL}"
           if [ -z "$URL" ] || [ -z "$KEY" ] || [ -z "$SUCCESS_URL" ]; then
             echo "::error::Required secrets are missing or empty"
             exit 1
@@ -81,7 +109,7 @@ jobs:
           } > .env
           echo "✓ .env written ($(wc -l < .env) lines)"
 
-      - name: Build and release
+      - name: Build and upload artifacts
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -90,16 +118,61 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "매드업 토큰 모니터 ${{ github.ref_name }}"
-          releaseBody: |
-            ## 변경 사항
-            GitHub Releases에서 자동 업데이트가 지원됩니다.
-
-            ### 설치
-            - macOS (Apple Silicon): `*_aarch64.dmg`
-            - macOS (Intel): `*_x64.dmg`
-            - Windows (x64): `*-setup.exe` (SmartScreen: 추가 정보 → 실행) — ⚠️ BETA: 로그인 미검증
-          releaseDraft: true
-          prerelease: false
+          # 미리 만든 draft 에 업로드 (생성 안 함). latest.json 은 finalize 가 담당.
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          includeUpdaterJson: false
           args: --target ${{ matrix.target }}
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # 3) 모든 플랫폼 빌드 후 latest.json 1개를 조립해 업로드.
+  #    각 플랫폼 .sig + 아티팩트 URL 을 모아 단일 latest.json 생성 → 자동 업데이트 정상.
+  # ────────────────────────────────────────────────────────────────────────────
+  finalize:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assemble & upload latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          BASE="https://github.com/$REPO/releases/download/$TAG"
+
+          mkdir -p sigs
+          gh release download "$TAG" --repo "$REPO" --pattern '*.sig' --dir sigs
+
+          assets=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name')
+          mac_aarch64=$(printf '%s\n' "$assets" | grep 'aarch64\.app\.tar\.gz$' | head -1)
+          mac_x64=$(printf '%s\n' "$assets" | grep '_x64\.app\.tar\.gz$' | head -1)
+          win_x64=$(printf '%s\n' "$assets" | grep -- '-setup\.exe$' | head -1)
+
+          sig_aarch64=$(cat sigs/*aarch64.app.tar.gz.sig)
+          sig_x64=$(cat sigs/*_x64.app.tar.gz.sig)
+          sig_win=$(cat sigs/*-setup.exe.sig)
+
+          for v in "$mac_aarch64" "$mac_x64" "$win_x64" "$sig_aarch64" "$sig_x64" "$sig_win"; do
+            if [ -z "$v" ]; then echo "::error::missing artifact or signature"; exit 1; fi
+          done
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg s_aarch64 "$sig_aarch64" --arg u_aarch64 "$BASE/$mac_aarch64" \
+            --arg s_x64 "$sig_x64" --arg u_x64 "$BASE/$mac_x64" \
+            --arg s_win "$sig_win" --arg u_win "$BASE/$win_x64" \
+            '{
+              version: $version,
+              pub_date: $pub_date,
+              platforms: {
+                "darwin-aarch64": { signature: $s_aarch64, url: $u_aarch64 },
+                "darwin-x86_64":  { signature: $s_x64,     url: $u_x64 },
+                "windows-x86_64": { signature: $s_win,     url: $u_win }
+              }
+            }' > latest.json
+
+          echo "=== latest.json ==="
+          cat latest.json
+          gh release upload "$TAG" latest.json --repo "$REPO" --clobber
