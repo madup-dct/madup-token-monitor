@@ -3,11 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  enable as enableAutostart,
-  disable as disableAutostart,
-  isEnabled as isAutostartEnabled,
-} from "@tauri-apps/plugin-autostart";
 import { supabase } from "../lib/supabase";
 import { syncAggregatesNow, type SyncResult } from "../lib/auth";
 import { useAuthUser } from "../hooks/useAuthUser";
@@ -24,7 +19,6 @@ const IS_TAURI = "__TAURI_INTERNALS__" in window;
 // =============================================================================
 // localStorage cache keys — Settings 진입 시 깜빡임 방지.
 // =============================================================================
-const AUTOSTART_CACHE_KEY = "madup-token-monitor:autostart";
 const DATA_DIR_CACHE_KEY = "madup-token-monitor:dataDir";
 const LAST_SYNC_KEY = "madup-token-monitor:lastSync";
 
@@ -80,10 +74,6 @@ export default function Settings() {
 
 
   // App behavior
-  const [autostart, setAutostart] = useState<boolean>(
-    () => readJson<boolean>(AUTOSTART_CACHE_KEY) ?? false,
-  );
-  const [autostartReady, setAutostartReady] = useState(false);
   const [showMenubarCost, setShowMenubarCost] = useState<boolean>(true);
   const [notifyOnUpdate, setNotifyOnUpdate] = useState<boolean>(true);
 
@@ -115,17 +105,7 @@ export default function Settings() {
   // Bootstrap
   // ───────────────────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!IS_TAURI) {
-      setAutostartReady(true);
-      return;
-    }
-    isAutostartEnabled()
-      .then((on) => {
-        setAutostart(on);
-        writeJson(AUTOSTART_CACHE_KEY, on);
-      })
-      .catch(() => {})
-      .finally(() => setAutostartReady(true));
+    if (!IS_TAURI) return;
     invoke<string>("get_data_dir")
       .then((dir) => {
         setDataDir(dir);
@@ -148,18 +128,6 @@ export default function Settings() {
   // ───────────────────────────────────────────────────────────────────────────
   // Handlers
   // ───────────────────────────────────────────────────────────────────────────
-  async function handleAutostartChange(next: boolean) {
-    setAutostart(next);
-    try {
-      if (next) await enableAutostart();
-      else await disableAutostart();
-      writeJson(AUTOSTART_CACHE_KEY, next);
-    } catch (err) {
-      console.warn("[autostart] toggle failed:", err);
-      setAutostart(!next);
-    }
-  }
-
   async function handleShowMenubarCostChange(next: boolean) {
     setShowMenubarCost(next);
     if (!IS_TAURI) return;
@@ -430,13 +398,6 @@ export default function Settings() {
 
         {/* ============ 03 · 앱 동작 ============ */}
         <Card num="03" eyebrow="앱 동작" title="실행 · 표시 옵션">
-          <SwitchRow
-            checked={autostart}
-            disabled={!IS_TAURI || !autostartReady}
-            onChange={handleAutostartChange}
-            label="로그인 시 자동 시작"
-            description="OS 로그인 시 백그라운드로 실행됩니다. 트레이/메뉴바 아이콘에서 창을 다시 띄울 수 있습니다."
-          />
           <SwitchRow
             checked={showMenubarCost}
             disabled={!IS_TAURI}

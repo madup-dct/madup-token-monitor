@@ -114,6 +114,15 @@ pub fn run() {
             tray::setup_tray(app.handle())?;
             tray::spawn_title_updater(app.handle().clone());
 
+            // 사내 전용 앱 — 로그인 시 항상 자동 실행 (사용자 선택 없음). 매 실행마다 보장.
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                let _ = app.autolaunch().enable();
+            }
+            // Dock 아이콘 숨김 — 트레이/메뉴바 전용(Accessory). 윈도우는 트레이에서 띄운다.
+            #[cfg(target_os = "macos")]
+            let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             // Windows/Linux 가 런타임에 `madup-token-monitor://` 스킴을 OS 레지스트리에 claim.
             // macOS 는 Info.plist 로 이미 등록되므로 이 경로를 건드리지 않는다 (무회귀).
             // 등록 실패(권한 등) 시 로그만 남긴다 — 로그인 딥링크가 안 먹는 원인 추적용.
