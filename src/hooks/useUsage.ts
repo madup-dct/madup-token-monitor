@@ -33,6 +33,34 @@ export function useSummary(range: Range) {
   });
 }
 
+/// 내 "활성 기기" 수 — usage_aggregates 의 distinct device_id (최근 rangeDays 일, 'legacy' 제외).
+/// device_id 는 기기별 분리 저장되므로 다기기 사용 시 2 이상이 된다.
+export function useMyDeviceCount(rangeDays = 30) {
+  return useQuery<number>({
+    queryKey: ["my_device_count", rangeDays],
+    queryFn: async () => {
+      if (IS_MOCK) return 1;
+      const { data: sess } = await supabase.auth.getSession();
+      const uid = sess.session?.user.id;
+      if (!uid) return 0;
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      d.setDate(d.getDate() - rangeDays);
+      const start = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const { data, error } = await supabase
+        .from("usage_aggregates")
+        .select("device_id")
+        .eq("user_id", uid)
+        .gte("date", start);
+      if (error || !data) return 0;
+      const set = new Set((data as { device_id: string }[]).map((r) => r.device_id));
+      set.delete("legacy"); // 마이그레이션 이전 데이터 — 실제 기기 아님
+      return set.size;
+    },
+    staleTime: 60_000,
+  });
+}
+
 // usage_aggregates row (본인 user_id 만 RLS 로 SELECT 허용).
 interface MyAggregateRow {
   date: string; // YYYY-MM-DD

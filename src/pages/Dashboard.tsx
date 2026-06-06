@@ -10,6 +10,7 @@ import {
   useUserMcp,
   useUserPlugins,
   useUserTools,
+  useMyDeviceCount,
   refreshOAuthUsage,
 } from "@/hooks/useUsage";
 import { useAuthUser } from "@/hooks/useAuthUser";
@@ -231,6 +232,7 @@ export function Dashboard() {
   const { data: topMcp } = useUserMcp(user?.id ?? null, 7);
   const { data: topPlugins } = useUserPlugins(user?.id ?? null, 7);
   const { data: topTools } = useUserTools(user?.id ?? null, 7);
+  const { data: deviceCount } = useMyDeviceCount(30);
   const { data: oauthResp } = useOAuthUsage();
   const oauthUsage = oauthResp?.data ?? null;
   const oauthError = oauthResp?.error ?? null;
@@ -544,9 +546,9 @@ export function Dashboard() {
                   color="violet"
                 />
                 <TodayStat
-                  label="활성 사용자"
-                  value="1"
-                  sub="기기 1대"
+                  label="활성 기기"
+                  value={String(deviceCount ?? 1)}
+                  sub="대"
                   color="lime"
                 />
               </div>
