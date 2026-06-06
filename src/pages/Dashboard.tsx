@@ -4,13 +4,16 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   useSummary,
   useTimeseries,
+  useMyHourly,
   useHeatmap,
   useOAuthUsage,
-  useTopMcp,
-  useTopPlugins,
-  useTopTools,
+  useUserMcp,
+  useUserPlugins,
+  useUserTools,
   refreshOAuthUsage,
 } from "@/hooks/useUsage";
+import { useAuthUser } from "@/hooks/useAuthUser";
+import { usePersistentState } from "@/lib/usePersistentState";
 import { PeriodChartCard } from "@/components/dashboard/PeriodChartCard";
 import { CarouselCard } from "@/components/dashboard/CarouselCard";
 import { HeatMap } from "@/components/HeatMap";
@@ -193,12 +196,13 @@ function fillMonthlyGaps(rows: AggRow[], year: string): AggRow[] {
 export function Dashboard() {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const [dailyRange, setDailyRange] = useState<Range>("7d");
-  const [dailyGranularity, setDailyGranularity] = useState<Granularity>("daily");
+  // 뷰 토글 — 메뉴 이동/재시작 후에도 마지막 선택값 유지 (usePersistentState).
+  const [dailyRange, setDailyRange] = usePersistentState<Range>("madup-token-monitor:dash:dailyRange", "7d");
+  const [dailyGranularity, setDailyGranularity] = usePersistentState<Granularity>("madup-token-monitor:dash:dailyGranularity", "daily");
   const [selectedMonth, setSelectedMonth] = useState<string>("");
   const [selectedYear, setSelectedYear] = useState<string>("");
-  const [dailyMetric, setDailyMetric] = useState<"tokens" | "cost">("tokens");
-  const [dailyView, setDailyView] = useState<"chart" | "list">("chart");
+  const [dailyMetric, setDailyMetric] = usePersistentState<"tokens" | "cost">("madup-token-monitor:dash:dailyMetric", "tokens");
+  const [dailyView, setDailyView] = usePersistentState<"chart" | "list">("madup-token-monitor:dash:dailyView", "chart");
   const [refreshing, setRefreshing] = useState(false);
   const [lastSync, setLastSync] = useState<Date>(() => new Date());
   const [, setTick] = useState(0);
@@ -209,18 +213,24 @@ export function Dashboard() {
     return () => clearInterval(id);
   }, []);
 
+  const { user } = useAuthUser();
+  // DB 미보유 차원 — 로컬 유지(세션수/모델/소스비용/히트맵).
   const { data: summary30 } = useSummary("30d");
   const { data: summary7 } = useSummary("7d");
   const { data: summary1 } = useSummary("1d");
   const { data: tsDaily } = useTimeseries(dailyRange);
-  // 시간별 뷰 전용 — 로컬 hourly 강제 (Supabase 일별 합산본은 ts=자정이라 00시 몰림 발생).
-  const { data: tsToday } = useTimeseries("1d", undefined, { preferLocal: true });
+  // 오늘 KPI 토큰/비용을 DB 기준으로 계산 (다기기 합산). usage_aggregates 본인 전 기기.
+  const { data: tsTodayDb } = useTimeseries("1d");
+  // 시간별(hourly) 차트 — DB(usage_hourly) 본인 전 기기. 시간별 뷰일 때만 fetch.
+  const { data: tsToday } = useMyHourly(dailyGranularity === "hourly");
   const { data: tsMonth } = useTimeseries("30d");
   const { data: tsAll } = useTimeseries("all");
+  // DB 미보유 차원 — 로컬 유지(세션수/모델/소스비용/히트맵).
   const { data: heatmap } = useHeatmap(56);
-  const { data: topMcp } = useTopMcp("7d");
-  const { data: topPlugins } = useTopPlugins("7d");
-  const { data: topTools } = useTopTools("7d");
+  // MCP / 플러그인 / 도구 — DB(security definer RPC, 본인 uid). 최근 7일.
+  const { data: topMcp } = useUserMcp(user?.id ?? null, 7);
+  const { data: topPlugins } = useUserPlugins(user?.id ?? null, 7);
+  const { data: topTools } = useUserTools(user?.id ?? null, 7);
   const { data: oauthResp } = useOAuthUsage();
   const oauthUsage = oauthResp?.data ?? null;
   const oauthError = oauthResp?.error ?? null;
@@ -321,16 +331,25 @@ export function Dashboard() {
 
   const sumIO = (s: typeof summary1) =>
     s.total_input_tokens + s.total_output_tokens + s.total_cache_read + s.total_cache_write;
-  const sumCache = (s: typeof summary1) => s.total_cache_read + s.total_cache_write;
 
-  const todayTokens = sumIO(summary1);
-  const todayCache = sumCache(summary1);
-  const todayCost = summary1.total_cost_usd;
-  // 오늘을 제외한 직전 7일 일평균과 비교.
-  // range "7d" = midnight(today-7)~now 라 sumIO(summary7)은 오늘 + 직전 7일치 → priorDays=7.
-  // (평균에 오늘을 포함하면 자기참조로 희석됨)
-  const weekAvgDailyTokens = priorDaysAverage(sumIO(summary7), todayTokens, 7);
+  // 오늘 토큰/비용/캐시 — DB(usage_aggregates 본인 전 기기) 기준. 다기기 합산.
+  const todayKey = localDateKey(Date.now());
+  const todayDb = (tsTodayDb ?? []).filter((p) => localDateKey(p.ts) === todayKey);
+  const todayTokens = todayDb.reduce(
+    (acc, p) => acc + p.input_tokens + p.output_tokens + (p.cache_read ?? 0) + (p.cache_write ?? 0),
+    0,
+  );
+  const todayCache = todayDb.reduce((acc, p) => acc + (p.cache_read ?? 0) + (p.cache_write ?? 0), 0);
+  const todayCost = todayDb.reduce((acc, p) => acc + p.cost_usd, 0);
+  // 오늘을 제외한 직전 7일 일평균과 비교 — DB(tsMonth) 기준으로 todayTokens 와 소스 일치.
+  // tsMonth 의 마지막 8일에서 오늘을 뺀 직전 7일 토큰 평균.
+  const last8Daily = aggregateByPeriod(tsMonth ?? [], "daily").slice(-8);
+  const priorWeekTokens = last8Daily
+    .filter((d) => d.date !== todayKey)
+    .reduce((acc, d) => acc + d.tokens, 0);
+  const weekAvgDailyTokens = priorDaysAverage(priorWeekTokens, 0, 7);
   const todayVsWeek = pctDiff(todayTokens, weekAvgDailyTokens);
+  // DB 미보유 차원 — 로컬 유지(세션수/요청수). usage_aggregates/hourly 에 session_count 없음.
   const todayMessages = summary1.message_count;
   const todaySessions = summary1.session_count;
 
@@ -381,9 +400,11 @@ export function Dashboard() {
   const activeDays30 = (heatmap ?? []).filter((d) => d.count > 0 && d.date >= cutoff30).length;
   const avgDailyTokens = avgTokensPerActiveDay(sumIO(summary30), activeDays30);
 
+  // DB 미보유 차원 — 로컬 유지(소스비용 미니바). usage_aggregates 에 source 비용 분해 없음.
   const toolItems = summary7.by_source
     .map((s) => ({ label: s.source, value: s.cost_usd }))
     .sort((a, b) => b.value - a.value);
+  // DB 미보유 차원 — 로컬 유지(모델별 토큰 미니바). usage_aggregates 에 model 차원 없음.
   const modelItems = summary7.by_model
     .map((m) => ({
       label: m.model.replace("claude-", ""),
@@ -509,6 +530,7 @@ export function Dashboard() {
                   sub={<span className="num">{formatKRW(todayCost)}</span>}
                   color="amber"
                 />
+                {/* DB 미보유 차원 — 로컬 유지(요청수/세션수). aggregates/hourly 에 session_count 없음. */}
                 <TodayStat
                   label="요청"
                   value={todayMessages.toLocaleString("ko-KR")}
@@ -708,6 +730,7 @@ export function Dashboard() {
 
         {/* ============ ROW 2: Activity carousel (col-4) ============ */}
         <CarouselCard
+          persistKey="madup-token-monitor:view:dash:activity"
           className="col-span-4"
           height={320}
           faces={[
@@ -716,6 +739,7 @@ export function Dashboard() {
               title: "활동",
               subtitle: "최근 8주",
               node: (
+                // DB 미보유 차원 — 로컬 유지(활동 히트맵). 일별 active-day count 는 로컬 전용.
                 <div className="h-full">
                   <HeatMap data={heatmap ?? []} weeks={8} />
                   <div className="mt-5 pt-3.5 border-t border-hairline grid grid-cols-2 gap-3.5">

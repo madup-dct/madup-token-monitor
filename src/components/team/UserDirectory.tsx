@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { fetchUsers, searchProfiles, type ProfileLite } from "@/lib/teams";
 
-/// 유저 디렉토리 — 검색 + 권한별 리스트(프로필 사진). 행 클릭 → /user/:id 상세.
+/// 유저 리스트 — 검색 + 권한별 리스트(프로필 사진). 행 클릭 → /user/:id 상세.
 /// 가시 범위는 profiles RLS 가 강제 (manager+ = 전사, team_leader = 팀메이트).
 export function UserDirectory() {
   const navigate = useNavigate();
@@ -28,7 +28,7 @@ export function UserDirectory() {
   return (
     <section className="mc-card">
       <header className="mb-3 flex items-baseline justify-between gap-3 flex-wrap">
-        <span className="text-[15px] font-semibold text-text-primary">유저 디렉토리</span>
+        <span className="text-[15px] font-semibold text-text-primary">유저 리스트</span>
         <span className="text-[11px] text-text-tertiary">프로필 클릭 → 상세 대시보드</span>
       </header>
 

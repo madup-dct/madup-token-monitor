@@ -15,6 +15,7 @@ import {
   type UserDailyAggregate,
   type UserHourlyAggregate,
 } from "@/lib/teams";
+import { usePersistentState } from "@/lib/usePersistentState";
 import { KpiHero } from "@/components/dashboard/KpiHero";
 import { PeriodChartCard, type PeriodRow } from "@/components/dashboard/PeriodChartCard";
 import { CarouselCard } from "@/components/dashboard/CarouselCard";
@@ -166,10 +167,22 @@ export default function UserDashboard() {
   const state = (location.state ?? {}) as NavState;
   const passedEntry = state.entry ?? null;
 
-  const [granularity, setGranularity] = useState<Granularity>("daily");
-  const [dailyRange, setDailyRange] = useState<DailyRange>(30);
-  const [metric, setMetric] = useState<"tokens" | "cost">("tokens");
-  const [view, setView] = useState<"chart" | "list">("chart");
+  const [granularity, setGranularity] = usePersistentState<Granularity>(
+    "madup-token-monitor:view:user:granularity",
+    "daily",
+  );
+  const [dailyRange, setDailyRange] = usePersistentState<DailyRange>(
+    "madup-token-monitor:view:user:dailyRange",
+    30,
+  );
+  const [metric, setMetric] = usePersistentState<"tokens" | "cost">(
+    "madup-token-monitor:view:user:metric",
+    "tokens",
+  );
+  const [view, setView] = usePersistentState<"chart" | "list">(
+    "madup-token-monitor:view:user:view",
+    "chart",
+  );
 
   // entry 가 없으면 (직접 URL 진입) profile 조회.
   const profileQ = useQuery({
@@ -438,6 +451,7 @@ export default function UserDashboard() {
         />
 
         <CarouselCard
+          persistKey="madup-token-monitor:view:user:carousel"
           className="col-span-4"
           height={320}
           faces={[

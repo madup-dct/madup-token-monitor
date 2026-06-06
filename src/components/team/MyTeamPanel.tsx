@@ -8,6 +8,7 @@ import {
   fetchTeamMembersUsage,
 } from "@/lib/teams";
 import { formatTokensCompact, formatUSD } from "@/lib/format";
+import { usePersistentState } from "@/lib/usePersistentState";
 import { Leaderboard } from "@/components/charts/Leaderboard";
 import { PrismCarousel } from "@/components/ui/PrismCarousel";
 import { KpiHero } from "@/components/dashboard/KpiHero";
@@ -51,8 +52,14 @@ export function MyTeamPanel() {
   const { user, myTeamIds } = useAuthUser();
   const navigate = useNavigate();
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
-  const [carouselIdx, setCarouselIdx] = useState(1); // 0=today 1=week 2=month
-  const [autoRotate, setAutoRotate] = useState(true);
+  const [carouselIdx, setCarouselIdx] = usePersistentState(
+    "madup-token-monitor:view:myteam:carouselIdx",
+    1,
+  ); // 0=today 1=week 2=month
+  const [autoRotate, setAutoRotate] = usePersistentState(
+    "madup-token-monitor:view:myteam:autoRotate",
+    true,
+  );
 
   const teamsQ = useQuery({
     queryKey: ["my_teams", user?.id ?? "anon"],

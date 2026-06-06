@@ -16,6 +16,7 @@ import { Select } from "@/components/ui/Select";
 import { UserFilterTable } from "@/components/team/UserFilterTable";
 import { UserListModal } from "@/components/team/UserListModal";
 import { formatTokensCompact } from "@/lib/format";
+import { usePersistentState } from "@/lib/usePersistentState";
 
 const RANGE_OPTIONS = [
   { value: "7", label: "최근 7일" },
@@ -160,8 +161,14 @@ function buildUsageChart(
 /// 매니저 전용 사용량 분석 — 사원 토큰 추이(평균/최대/최소) + 전사 유저 테이블 + MCP/플러그인별 사용자.
 export default function AdminAnalytics() {
   const role = useCurrentRole();
-  const [days, setDays] = useState(30);
-  const [gran, setGran] = useState<Gran>("daily");
+  const [days, setDays] = usePersistentState(
+    "madup-token-monitor:view:admin:days",
+    30,
+  );
+  const [gran, setGran] = usePersistentState<Gran>(
+    "madup-token-monitor:view:admin:gran",
+    "daily",
+  );
   const [modal, setModal] = useState<EntityModal | null>(null);
 
   const dir = useDirectory(days);
@@ -273,6 +280,7 @@ export default function AdminAnalytics() {
 
       {/* 엔터티별 사용자 (행 클릭 → 사용자 리스트 모달) */}
       <CarouselCard
+        persistKey="madup-token-monitor:view:admin:carousel"
         className="col-span-12"
         height={360}
         faces={[

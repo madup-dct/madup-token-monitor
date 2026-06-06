@@ -60,33 +60,39 @@ pub fn setup_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
-/// 1분마다 오늘(local-tz) USD 비용을 읽어 트레이 타이틀에 반영.
+/// 트레이 타이틀을 현재 값으로 1회 갱신.
 /// macOS는 메뉴바 아이콘 옆 텍스트, 그 외 OS는 tooltip에 표시.
 /// `show_menubar_cost` 설정이 false 면 메뉴바 텍스트는 비워둔다.
+/// 폴링(spawn_title_updater) 과 토글 변경 직후(set_setting) 양쪽에서 호출된다.
+pub fn refresh_tray_title<R: Runtime>(app: &AppHandle<R>) {
+    let cost = crate::commands::today_cost_usd();
+    let show_text = crate::commands::read_show_menubar_cost();
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        #[cfg(target_os = "macos")]
+        {
+            let title = if show_text && cost >= 0.5 {
+                format!(" ${}", cost.round() as i64)
+            } else {
+                String::new()
+            };
+            let _ = tray.set_title(Some(title));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let tooltip = if show_text && cost >= 0.5 {
+                format!("매드업 토큰 모니터 — 오늘 ${}", cost.round() as i64)
+            } else {
+                "매드업 토큰 모니터".to_string()
+            };
+            let _ = tray.set_tooltip(Some(tooltip));
+        }
+    }
+}
+
+/// 1분마다 오늘(local-tz) USD 비용을 읽어 트레이 타이틀에 반영.
 pub fn spawn_title_updater<R: Runtime>(app: AppHandle<R>) {
     std::thread::spawn(move || loop {
-        let cost = crate::commands::today_cost_usd();
-        let show_text = crate::commands::read_show_menubar_cost();
-        if let Some(tray) = app.tray_by_id(TRAY_ID) {
-            #[cfg(target_os = "macos")]
-            {
-                let title = if show_text && cost >= 0.5 {
-                    format!(" ${}", cost.round() as i64)
-                } else {
-                    String::new()
-                };
-                let _ = tray.set_title(Some(title));
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                let tooltip = if show_text && cost >= 0.5 {
-                    format!("매드업 토큰 모니터 — 오늘 ${}", cost.round() as i64)
-                } else {
-                    "매드업 토큰 모니터".to_string()
-                };
-                let _ = tray.set_tooltip(Some(tooltip));
-            }
-        }
+        refresh_tray_title(&app);
         std::thread::sleep(std::time::Duration::from_secs(60));
     });
 }

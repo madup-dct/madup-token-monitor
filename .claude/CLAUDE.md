@@ -84,6 +84,9 @@ madup_token_monitoring/
 | GitHub Repository Secrets | env / 서명 키 주입 | `docs/GITHUB_SECRETS.md` |
 | Tauri Updater | GitHub Releases 기반 자동 업데이트 | `docs/AUTO_UPDATE_SETUP.md` |
 
+> **Supabase DB 직접 작업(SELECT / RPC / 마이그레이션 / RLS)은 `.claude/agents/supabase-cli-agent.md` 로 위임 — 우회 금지.**
+> psql(pooler) 접속 레시피·전체 스키마/RPC 카탈로그·안전 게이트가 그 agent 에 정리돼 있다. 연결값은 `supabase/.temp/`(gitignore) + `~/.pgpass` 에서 읽는다.
+
 ## 4. 빠른 셋업 (개발자)
 
 ```bash

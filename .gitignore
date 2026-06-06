@@ -31,3 +31,9 @@ dist-ssr
 *.sw?
 
 .env
+
+# Supabase CLI local link metadata (contains project-ref — never commit)
+supabase/.temp/
+
+# Local ad-hoc DB query script (personal connection details, no password)
+mtm_query.sh

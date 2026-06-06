@@ -14,6 +14,7 @@ use crate::db;
 #[derive(Debug, Serialize)]
 struct UsageAggregate {
     user_id: String,
+    device_id: String,
     date: String,
     source: String,
     total_input: i64,
@@ -25,6 +26,7 @@ struct UsageAggregate {
 #[derive(Debug, Serialize)]
 struct McpUsageRow {
     user_id: String,
+    device_id: String,
     date: String,
     mcp_server: String,
     count: i64,
@@ -33,6 +35,7 @@ struct McpUsageRow {
 #[derive(Debug, Serialize)]
 struct PluginUsageRow {
     user_id: String,
+    device_id: String,
     date: String,
     plugin_id: String,
     count: i64,
@@ -42,15 +45,18 @@ struct PluginUsageRow {
 #[derive(Debug, Serialize)]
 struct ToolUsageRow {
     user_id: String,
+    device_id: String,
     date: String,
     tool_name: String,
     count: i64,
 }
 
-/// usage_hourly row 형태 — UTC 정시(hour) 버킷. (user_id, hour_utc, source, model) PK.
+/// usage_hourly row 형태 — UTC 정시(hour) 버킷.
+/// (user_id, hour_utc, source, model, device_id) PK.
 #[derive(Debug, Serialize)]
 struct HourlyRow {
     user_id: String,
+    device_id: String,
     hour_utc: String,
     source: String,
     model: String,
@@ -80,7 +86,7 @@ fn utc_hour_string(ts_ms: i64) -> Option<String> {
         .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
 }
 
-fn read_usage_aggregates(user_id: &str) -> Result<Vec<UsageAggregate>, String> {
+fn read_usage_aggregates(user_id: &str, device_id: &str) -> Result<Vec<UsageAggregate>, String> {
     let conn = db::open().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
@@ -127,6 +133,7 @@ fn read_usage_aggregates(user_id: &str) -> Result<Vec<UsageAggregate>, String> {
         .into_iter()
         .map(|((date, source), (inp, out, total, cost))| UsageAggregate {
             user_id: user_id.to_string(),
+            device_id: device_id.to_string(),
             date,
             source,
             total_input: inp,
@@ -137,7 +144,10 @@ fn read_usage_aggregates(user_id: &str) -> Result<Vec<UsageAggregate>, String> {
         .collect())
 }
 
-fn read_tool_calls(user_id: &str) -> Result<(Vec<McpUsageRow>, Vec<PluginUsageRow>), String> {
+fn read_tool_calls(
+    user_id: &str,
+    device_id: &str,
+) -> Result<(Vec<McpUsageRow>, Vec<PluginUsageRow>), String> {
     let conn = db::open().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare("SELECT ts, mcp_server, plugin_id FROM tool_calls")
@@ -172,6 +182,7 @@ fn read_tool_calls(user_id: &str) -> Result<(Vec<McpUsageRow>, Vec<PluginUsageRo
         .into_iter()
         .map(|((date, mcp_server), count)| McpUsageRow {
             user_id: user_id.to_string(),
+            device_id: device_id.to_string(),
             date,
             mcp_server,
             count,
@@ -181,6 +192,7 @@ fn read_tool_calls(user_id: &str) -> Result<(Vec<McpUsageRow>, Vec<PluginUsageRo
         .into_iter()
         .map(|((date, plugin_id), count)| PluginUsageRow {
             user_id: user_id.to_string(),
+            device_id: device_id.to_string(),
             date,
             plugin_id,
             count,
@@ -192,7 +204,7 @@ fn read_tool_calls(user_id: &str) -> Result<(Vec<McpUsageRow>, Vec<PluginUsageRo
 /// usage_events 를 UTC 정시 버킷으로 합산해 usage_hourly 행 생성.
 /// 최근 30일만 — 시간별 뷰는 최근만 의미 있고, 전체 기간이면 row 수가 폭증한다
 /// (daily 의 24배). 일별 합계(read_usage_aggregates)는 전체 기간 그대로 올린다.
-fn read_usage_hourly(user_id: &str) -> Result<Vec<HourlyRow>, String> {
+fn read_usage_hourly(user_id: &str, device_id: &str) -> Result<Vec<HourlyRow>, String> {
     let conn = db::open().map_err(|e| e.to_string())?;
     let cutoff_ms = Utc::now().timestamp_millis() - 30 * 86_400_000;
     let mut stmt = conn
@@ -240,6 +252,7 @@ fn read_usage_hourly(user_id: &str) -> Result<Vec<HourlyRow>, String> {
         .map(
             |((hour_utc, source, model), (inp, out, cr, cw, cost, count))| HourlyRow {
                 user_id: user_id.to_string(),
+                device_id: device_id.to_string(),
                 hour_utc,
                 source,
                 model,
@@ -255,7 +268,7 @@ fn read_usage_hourly(user_id: &str) -> Result<Vec<HourlyRow>, String> {
 }
 
 /// tool_calls 의 tool_name 을 (date, tool_name) 별로 카운트.
-fn read_tool_usage(user_id: &str) -> Result<Vec<ToolUsageRow>, String> {
+fn read_tool_usage(user_id: &str, device_id: &str) -> Result<Vec<ToolUsageRow>, String> {
     let conn = db::open().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
@@ -282,6 +295,7 @@ fn read_tool_usage(user_id: &str) -> Result<Vec<ToolUsageRow>, String> {
         .into_iter()
         .map(|((date, tool_name), count)| ToolUsageRow {
             user_id: user_id.to_string(),
+            device_id: device_id.to_string(),
             date,
             tool_name,
             count,
@@ -346,10 +360,12 @@ pub async fn sync_aggregates_now(
     access_token: String,
     user_id: String,
 ) -> Result<SyncResult, String> {
-    let usage = read_usage_aggregates(&user_id)?;
-    let (mcp, plugins) = read_tool_calls(&user_id)?;
-    let hourly = read_usage_hourly(&user_id)?;
-    let tools = read_tool_usage(&user_id)?;
+    let device_id = crate::commands::get_or_create_device_id()?;
+
+    let usage = read_usage_aggregates(&user_id, &device_id)?;
+    let (mcp, plugins) = read_tool_calls(&user_id, &device_id)?;
+    let hourly = read_usage_hourly(&user_id, &device_id)?;
+    let tools = read_tool_usage(&user_id, &device_id)?;
 
     let usage_n = upsert(
         &supabase_url,
@@ -357,7 +373,7 @@ pub async fn sync_aggregates_now(
         &access_token,
         "usage_aggregates",
         &usage,
-        "user_id,date,source",
+        "user_id,date,source,device_id",
     )?;
     let mcp_n = upsert(
         &supabase_url,
@@ -365,7 +381,7 @@ pub async fn sync_aggregates_now(
         &access_token,
         "mcp_usage",
         &mcp,
-        "user_id,date,mcp_server",
+        "user_id,date,mcp_server,device_id",
     )?;
     let plugin_n = upsert(
         &supabase_url,
@@ -373,7 +389,7 @@ pub async fn sync_aggregates_now(
         &access_token,
         "plugin_usage",
         &plugins,
-        "user_id,date,plugin_id",
+        "user_id,date,plugin_id,device_id",
     )?;
     let hourly_n = upsert(
         &supabase_url,
@@ -381,7 +397,7 @@ pub async fn sync_aggregates_now(
         &access_token,
         "usage_hourly",
         &hourly,
-        "user_id,hour_utc,source,model",
+        "user_id,hour_utc,source,model,device_id",
     )?;
     let tool_n = upsert(
         &supabase_url,
@@ -389,8 +405,23 @@ pub async fn sync_aggregates_now(
         &access_token,
         "tool_usage",
         &tools,
-        "user_id,date,tool_name",
+        "user_id,date,tool_name,device_id",
     )?;
+
+    // legacy 정리 — 5개 upsert 가 모두 성공한 뒤(업로드 실패 시 도달 안 함) 1회만.
+    // 옛 device_id='legacy' 행은 신규 device_id 행으로 이관됐으므로 중복 합산을 막기 위해 삭제.
+    // 로컬 one-time 플래그로 가드해 매 sync 마다 RPC 를 호출하지 않는다.
+    if !crate::commands::read_bool_flag("device_migration_purged") {
+        let purge_url = format!("{}/rest/v1/rpc/purge_my_legacy", supabase_url);
+        let resp = ureq::post(&purge_url)
+            .set("apikey", &publishable_key)
+            .set("Authorization", &format!("Bearer {}", access_token))
+            .set("Content-Type", "application/json")
+            .send_json(serde_json::json!({}));
+        if resp.is_ok() {
+            let _ = crate::commands::set_bool_flag("device_migration_purged", true);
+        }
+    }
 
     Ok(SyncResult {
         usage_rows: usage_n,

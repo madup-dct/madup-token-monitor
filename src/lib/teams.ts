@@ -143,6 +143,56 @@ export async function inviteToTeam(teamId: string, identifier: string): Promise<
   return data as string;
 }
 
+export interface InviteCandidate {
+  user_id: string;
+  name: string | null;
+  email: string | null;
+  avatar_url: string | null;
+  slack_handle: string | null;
+}
+
+/// 초대 후보 검색 (name / slack_handle / email 부분 매치).
+/// security definer RPC — 팀 owner/admin 이면 전역 role 과 무관하게 사내 전체에서 검색.
+/// 이미 해당 팀의 멤버인 user 는 제외.
+export async function searchProfilesForInvite(
+  teamId: string,
+  query: string,
+  limit = 10
+): Promise<InviteCandidate[]> {
+  const { data, error } = await supabase.rpc("search_profiles_for_invite", {
+    p_team_id: teamId,
+    p_query: query,
+    p_limit: limit,
+  });
+  if (error) throw error;
+  return (data ?? []) as InviteCandidate[];
+}
+
+/// 여러 user 를 팀에 일괄 초대. owner/admin 만 호출 가능 (RPC 내부 가드).
+/// 새로 추가된 멤버 수를 반환 (이미 있던 멤버는 제외).
+export async function inviteMembersToTeam(
+  teamId: string,
+  userIds: string[]
+): Promise<number> {
+  const { data, error } = await supabase.rpc("invite_members_to_team", {
+    p_team_id: teamId,
+    p_user_ids: userIds,
+  });
+  if (error) throw error;
+  return (data ?? 0) as number;
+}
+
+/// 팀에서 멤버 제거(강퇴). RLS delete 정책: 본인 leave 또는 팀 owner/admin(is_team_admin).
+/// 즉 권한은 서버(RLS)가 강제한다 — 비관리자가 호출하면 0행 삭제/에러.
+export async function removeTeamMember(teamId: string, userId: string): Promise<void> {
+  const { error } = await supabase
+    .from("team_members")
+    .delete()
+    .eq("team_id", teamId)
+    .eq("user_id", userId);
+  if (error) throw error;
+}
+
 /// 사내 유저에게 전역 role 부여. manager+ 만 호출 가능.
 export async function assignAppRole(userId: string, role: AppRole): Promise<void> {
   const { error } = await supabase.rpc("assign_app_role", {

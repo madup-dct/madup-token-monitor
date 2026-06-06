@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { fetchTeamAggregates, fetchTeamMembersUsage } from "@/lib/teams";
+import { usePersistentState } from "@/lib/usePersistentState";
 import { KpiHero } from "@/components/dashboard/KpiHero";
 import { Segmented } from "@/components/ui/Segmented";
 import { useRole } from "@/hooks/useRole";
@@ -14,7 +15,10 @@ import type { TeamAggregate, TeamMemberUsage } from "@/types/models";
 export function CrossTeamPanel() {
   const navigate = useNavigate();
   const isManager = useRole("manager");
-  const [metric, setMetric] = useState<"tokens" | "cost">("tokens");
+  const [metric, setMetric] = usePersistentState<"tokens" | "cost">(
+    "madup-token-monitor:view:crossteam:metric",
+    "tokens",
+  );
   const [selected, setSelected] = useState<{ id: string; name: string } | null>(null);
 
   const aggQ = useQuery({

@@ -56,6 +56,56 @@ fn write_settings(map: &BTreeMap<String, JsonValue>) -> Result<(), String> {
     std::fs::write(&path, raw).map_err(|e| e.to_string())
 }
 
+// =============================================================================
+// 기기 식별자 — device.json (config dir 안)
+// =============================================================================
+
+/// 기기별 device_id 파일 경로 — `config_dir()/madup-token-monitor/device.json`.
+/// 의도적으로 db_path()(data_dir) 가 아니라 config_dir 에 둔다: delete_all_data 가
+/// data_files() 만 지우므로 기기 정체성은 데이터 삭제와 분리되어 보존된다.
+fn device_id_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|p| p.join("madup-token-monitor").join("device.json"))
+}
+
+/// 기기별 고유 device_id 를 1회 생성·영속해 반환.
+/// 파일이 있으면 읽고, 없으면 uuidv4 를 생성해 저장한다.
+/// 다기기 사용 시 집계가 기기별 행으로 분리 보존되도록 하는 키.
+pub fn get_or_create_device_id() -> Result<String, String> {
+    let path = device_id_path().ok_or_else(|| "device 경로를 찾을 수 없습니다".to_string())?;
+
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+        if let Ok(map) = serde_json::from_str::<BTreeMap<String, JsonValue>>(&raw) {
+            if let Some(JsonValue::String(id)) = map.get("device_id") {
+                if !id.is_empty() {
+                    return Ok(id.clone());
+                }
+            }
+        }
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut map: BTreeMap<String, JsonValue> = BTreeMap::new();
+    map.insert("device_id".to_string(), JsonValue::String(id.clone()));
+    let raw = serde_json::to_string_pretty(&map).map_err(|e| e.to_string())?;
+    std::fs::write(&path, raw).map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+/// settings.json 의 boolean 플래그 1개 조회 (없으면 false). 일회성 마이그레이션 가드용.
+pub fn read_bool_flag(key: &str) -> bool {
+    matches!(read_settings().get(key), Some(JsonValue::Bool(true)))
+}
+
+/// settings.json 의 boolean 플래그 1개 set. 일회성 마이그레이션 완료 표시용.
+pub fn set_bool_flag(key: &str, value: bool) -> Result<(), String> {
+    let mut map = read_settings();
+    map.insert(key.to_string(), JsonValue::Bool(value));
+    write_settings(&map)
+}
+
 /// `show_menubar_cost` 가 `false` 일 때 false 반환. 기본값은 true.
 pub fn read_show_menubar_cost() -> bool {
     let map = read_settings();
@@ -72,10 +122,16 @@ pub fn get_settings() -> Result<JsonValue, String> {
 }
 
 #[tauri::command]
-pub fn set_setting(key: String, value: JsonValue) -> Result<(), String> {
+pub fn set_setting(app: tauri::AppHandle, key: String, value: JsonValue) -> Result<(), String> {
+    let touched_menubar = key == "show_menubar_cost";
     let mut map = read_settings();
     map.insert(key, value);
-    write_settings(&map)
+    write_settings(&map)?;
+    // 토글 즉시 반영 — 트레이 타이틀을 바로 갱신(60초 폴링 지연 제거).
+    if touched_menubar {
+        crate::tray::refresh_tray_title(&app);
+    }
+    Ok(())
 }
 
 /// React Query 영속 캐시 등 클라이언트 캐시는 JS 측에서 비우고,

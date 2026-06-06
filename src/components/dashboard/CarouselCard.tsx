@@ -1,5 +1,39 @@
-import { useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { PrismCarousel } from "@/components/ui/PrismCarousel";
+
+/// localStorage 읽기 (key 가 null 이면 메모리 전용 — fallback 반환).
+function readPersisted<T>(key: string | null, fallback: T): T {
+  if (!key) return fallback;
+  try {
+    const raw = localStorage.getItem(key);
+    return raw != null ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/// localStorage 쓰기 후 값 반환 (key 가 null 이면 기록 생략).
+function writePersisted<T>(key: string | null, value: T): T {
+  if (key) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      /* localStorage 불가 환경 — 메모리 state 로만 동작 */
+    }
+  }
+  return value;
+}
+
+/// SetStateAction 을 이전 값 기준으로 다음 값으로 해소.
+function resolve<T>(action: SetStateAction<T>, prev: T): T {
+  return typeof action === "function" ? (action as (p: T) => T)(prev) : action;
+}
 
 export interface CarouselFace {
   key: string;
@@ -16,14 +50,29 @@ export interface CarouselCardProps {
   height?: number;
   /// 카드 외곽 className (예: "col-span-4").
   className?: string;
+  /// 지정하면 현재 면(idx)·자동회전(auto) 선택을 localStorage 에 영속 (라우트 이동/재시작 후 유지).
+  /// 사용처마다 고유해야 함 (예: "madup-token-monitor:view:dash:activity").
+  persistKey?: string;
 }
 
 /// 헤더(회전 제목 + 이전/점/다음 + 자동토글) + PrismCarousel 을 묶은 공통 carousel 카드.
 /// Dashboard / UserDashboard 의 활동·MCP·플러그인·도구·프로젝트 페이지 넘김 UI 에 사용.
 /// 면 내용(node)은 호출자가 구성 — 카드 chrome 만 공유한다.
-export function CarouselCard({ faces, height = 320, className = "" }: CarouselCardProps) {
-  const [idx, setIdx] = useState(0);
-  const [auto, setAuto] = useState(true);
+export function CarouselCard({ faces, height = 320, className = "", persistKey }: CarouselCardProps) {
+  // persistKey 가 있으면 lazy init 으로 localStorage 에서 마지막 선택을 읽어 깜빡임 없이 복원.
+  // 훅 규칙: 항상 동일하게 useState 두 개만 호출하고, persistKey 유무로 초기화/기록만 분기.
+  const idxKey = persistKey ? `${persistKey}:idx` : null;
+  const autoKey = persistKey ? `${persistKey}:auto` : null;
+  const [idx, setIdxRaw] = useState<number>(() => readPersisted(idxKey, 0));
+  const [auto, setAutoRaw] = useState<boolean>(() => readPersisted(autoKey, true));
+  const setIdx = useCallback<Dispatch<SetStateAction<number>>>(
+    (action) => setIdxRaw((prev) => writePersisted(idxKey, resolve(action, prev))),
+    [idxKey],
+  );
+  const setAuto = useCallback<Dispatch<SetStateAction<boolean>>>(
+    (action) => setAutoRaw((prev) => writePersisted(autoKey, resolve(action, prev))),
+    [autoKey],
+  );
   const n = faces.length;
   const active = faces[Math.min(idx, n - 1)];
 

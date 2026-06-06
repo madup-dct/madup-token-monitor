@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
 import { syncAggregatesNow, type SyncResult } from "../lib/auth";
@@ -21,6 +22,8 @@ const IS_TAURI = "__TAURI_INTERNALS__" in window;
 // =============================================================================
 const DATA_DIR_CACHE_KEY = "madup-token-monitor:dataDir";
 const LAST_SYNC_KEY = "madup-token-monitor:lastSync";
+const SHOW_MENUBAR_COST_KEY = "madup-token-monitor:showMenubarCost";
+const NOTIFY_ON_UPDATE_KEY = "madup-token-monitor:notifyOnUpdate";
 
 interface AppSettings {
   show_menubar_cost?: boolean;
@@ -73,9 +76,13 @@ export default function Settings() {
   const isManager = useRole("manager");
 
 
-  // App behavior
-  const [showMenubarCost, setShowMenubarCost] = useState<boolean>(true);
-  const [notifyOnUpdate, setNotifyOnUpdate] = useState<boolean>(true);
+  // App behavior — localStorage 로 즉시 복원(dev/재마운트 깜빡임 방지), Tauri 면 get_settings 가 source of truth.
+  const [showMenubarCost, setShowMenubarCost] = useState<boolean>(
+    () => readJson<boolean>(SHOW_MENUBAR_COST_KEY) ?? true,
+  );
+  const [notifyOnUpdate, setNotifyOnUpdate] = useState<boolean>(
+    () => readJson<boolean>(NOTIFY_ON_UPDATE_KEY) ?? true,
+  );
 
   // App info
   const [dataDir, setDataDir] = useState<string | null>(
@@ -96,6 +103,14 @@ export default function Settings() {
     const id = setInterval(() => setTick((n) => n + 1), 30_000);
     return () => clearInterval(id);
   }, []);
+
+  // Updater
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState<Update | null>(null);
+  const [updateDownloading, setUpdateDownloading] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<number | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [lastUpdateCheck, setLastUpdateCheck] = useState<Date | null>(null);
 
   // Danger zone
   const [clearing, setClearing] = useState(false);
@@ -118,30 +133,101 @@ export default function Settings() {
     invoke<AppSettings | null>("get_settings")
       .then((s) => {
         if (s && typeof s === "object") {
-          setShowMenubarCost(s.show_menubar_cost ?? true);
-          setNotifyOnUpdate(s.notify_on_update ?? true);
+          const smc = s.show_menubar_cost ?? true;
+          const nou = s.notify_on_update ?? true;
+          setShowMenubarCost(smc);
+          writeJson(SHOW_MENUBAR_COST_KEY, smc);
+          setNotifyOnUpdate(nou);
+          writeJson(NOTIFY_ON_UPDATE_KEY, nou);
         }
       })
       .catch(() => {});
+    // Settings 진입 시 자동 업데이트 체크 1회 (언마운트/StrictMode 중복 방지)
+    let alive = true;
+    runCheckUpdate(() => alive);
+    return () => {
+      alive = false;
+    };
   }, []);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Handlers
   // ───────────────────────────────────────────────────────────────────────────
+  async function runCheckUpdate(isAlive: () => boolean = () => true) {
+    if (!IS_TAURI) return;
+    setUpdateChecking(true);
+    setUpdateError(null);
+    setUpdateAvailable(null);
+    try {
+      const update = await checkUpdate();
+      if (!isAlive()) return;
+      setLastUpdateCheck(new Date());
+      if (update?.available) {
+        setUpdateAvailable(update);
+      }
+    } catch (e) {
+      if (!isAlive()) return;
+      setUpdateError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (isAlive()) setUpdateChecking(false);
+    }
+  }
+
+  async function handleDownloadAndInstall() {
+    if (!updateAvailable) return;
+    setUpdateDownloading(true);
+    setUpdateProgress(0);
+    setUpdateError(null);
+    try {
+      // contentLength 는 Started 에만, chunkLength(이번 청크 크기)는 Progress 에만 온다.
+      // 누적해서 비율 계산. 총량 미상이면 퍼센트 대신 indeterminate(null) 유지.
+      let total = 0;
+      let downloaded = 0;
+      await updateAvailable.downloadAndInstall((event: import("@tauri-apps/plugin-updater").DownloadEvent) => {
+        switch (event.event) {
+          case "Started":
+            total = event.data.contentLength ?? 0;
+            downloaded = 0;
+            setUpdateProgress(total > 0 ? 0 : null);
+            break;
+          case "Progress":
+            downloaded += event.data.chunkLength;
+            if (total > 0) {
+              setUpdateProgress(Math.round((downloaded / total) * 100));
+            }
+            break;
+          case "Finished":
+            setUpdateProgress(100);
+            break;
+        }
+      });
+      // 설치 완료 → 재시작 (기존 handleRestart 패턴 재사용)
+      await invoke("restart_app");
+    } catch (e) {
+      setUpdateError(e instanceof Error ? e.message : String(e));
+      setUpdateDownloading(false);
+      setUpdateProgress(null);
+    }
+  }
+
   async function handleShowMenubarCostChange(next: boolean) {
     setShowMenubarCost(next);
+    writeJson(SHOW_MENUBAR_COST_KEY, next);
     if (!IS_TAURI) return;
-    invoke("set_setting", { key: "show_menubar_cost", value: next }).catch(
-      () => setShowMenubarCost(!next),
-    );
+    invoke("set_setting", { key: "show_menubar_cost", value: next }).catch(() => {
+      setShowMenubarCost(!next);
+      writeJson(SHOW_MENUBAR_COST_KEY, !next);
+    });
   }
 
   async function handleNotifyOnUpdateChange(next: boolean) {
     setNotifyOnUpdate(next);
+    writeJson(NOTIFY_ON_UPDATE_KEY, next);
     if (!IS_TAURI) return;
-    invoke("set_setting", { key: "notify_on_update", value: next }).catch(
-      () => setNotifyOnUpdate(!next),
-    );
+    invoke("set_setting", { key: "notify_on_update", value: next }).catch(() => {
+      setNotifyOnUpdate(!next);
+      writeJson(NOTIFY_ON_UPDATE_KEY, !next);
+    });
   }
 
   async function handleOpenDataFolder() {
@@ -409,8 +495,8 @@ export default function Settings() {
             checked={notifyOnUpdate}
             disabled={!IS_TAURI}
             onChange={handleNotifyOnUpdateChange}
-            label="새 버전 알림 (준비 중)"
-            description="GitHub Releases에 새 버전이 배포되면 알림으로 표시합니다. 알림 UI 는 추후 구현."
+            label="새 버전 알림"
+            description="GitHub Releases에 새 버전이 배포되면 앱 정보 카드에 업데이트 안내를 표시합니다."
           />
 
           <div className="mt-4 pt-4 border-t border-hairline">
@@ -474,35 +560,66 @@ export default function Settings() {
               label="현재 버전"
               value={<span className="num text-azure">{appVersion ?? "—"}</span>}
               accessory={
-                <span
-                  className="inline-flex items-center gap-1.5 h-[26px] px-3 rounded-full text-[11.5px] font-semibold"
-                  style={{
-                    background: "var(--color-lime-soft)",
-                    color: "var(--color-lime)",
-                  }}
-                >
-                  <svg
-                    width="10"
-                    height="10"
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
+                updateChecking ? (
+                  <span className="text-[11px] text-text-tertiary">확인 중…</span>
+                ) : updateAvailable ? (
+                  <span
+                    className="inline-flex items-center gap-1.5 h-[26px] px-3 rounded-full text-[11.5px] font-semibold"
+                    style={{
+                      background: "var(--color-azure-soft)",
+                      color: "var(--color-azure)",
+                    }}
                   >
-                    <path d="M3 8l4 4 6-7" />
-                  </svg>
-                  최신
-                </span>
+                    <svg
+                      width="10"
+                      height="10"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M8 3v10M4 9l4 4 4-4" />
+                    </svg>
+                    업데이트 있음 {updateAvailable.version}
+                  </span>
+                ) : (
+                  <span
+                    className="inline-flex items-center gap-1.5 h-[26px] px-3 rounded-full text-[11.5px] font-semibold"
+                    style={{
+                      background: "var(--color-lime-soft)",
+                      color: "var(--color-lime)",
+                    }}
+                  >
+                    <svg
+                      width="10"
+                      height="10"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M3 8l4 4 6-7" />
+                    </svg>
+                    최신
+                  </span>
+                )
               }
             />
             <InfoRow
               label="자동 업데이트"
-              value="GitHub Releases — 새 버전 배포 시 시작 시 알림 (준비 중)"
+              value="GitHub Releases 기반 — 설정 진입 시 자동 확인"
               accessory={
                 <span className="text-[11px] text-text-tertiary">
-                  마지막 확인 <span className="num">시작 시점</span>
+                  마지막 확인{" "}
+                  <span className="num">
+                    {lastUpdateCheck
+                      ? formatRelative(Date.now() - lastUpdateCheck.getTime())
+                      : "—"}
+                  </span>
                 </span>
               }
             />
@@ -555,6 +672,90 @@ export default function Settings() {
                 </ExternalLink>
               }
             />
+          </div>
+
+          {/* 업데이트 확인 / 다운로드·설치 패널 */}
+          <div className="mt-4 pt-4 border-t border-hairline">
+            <div className="flex justify-between items-start gap-4">
+              <div className="flex-1 min-w-0">
+                <div className="text-[13.5px] font-semibold text-text-primary mb-1">
+                  업데이트 확인 · 설치
+                </div>
+                <div className="text-[12px] text-text-tertiary leading-relaxed">
+                  {updateDownloading
+                    ? updateProgress !== null
+                      ? `다운로드 중… ${updateProgress}%`
+                      : "다운로드 중…"
+                    : updateAvailable
+                    ? `v${updateAvailable.version} 업데이트를 사용할 수 있습니다. 다운로드 후 자동으로 재시작됩니다.`
+                    : updateChecking
+                    ? "최신 버전을 확인하는 중입니다."
+                    : "현재 최신 버전을 사용 중입니다."}
+                </div>
+                {updateDownloading && updateProgress !== null && (
+                  <div
+                    className="mt-2 h-1.5 rounded-full overflow-hidden"
+                    style={{ background: "var(--color-surface-3)" }}
+                  >
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{
+                        width: `${updateProgress}%`,
+                        background: "var(--color-azure)",
+                      }}
+                    />
+                  </div>
+                )}
+                {updateError && (
+                  <p className="text-[11.5px] text-coral mt-2 break-all">
+                    오류: {updateError}
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-2 shrink-0">
+                {updateAvailable && !updateDownloading && (
+                  <button
+                    type="button"
+                    onClick={handleDownloadAndInstall}
+                    className="mc-btn-primary h-8 px-3.5 text-[12.5px]"
+                  >
+                    <svg
+                      width="11"
+                      height="11"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M8 3v10M4 9l4 4 4-4" />
+                    </svg>
+                    다운로드 · 설치
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => runCheckUpdate()}
+                  disabled={updateChecking || updateDownloading || !IS_TAURI}
+                  className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-md bg-surface-1 border border-hairline-strong text-text-primary text-[12.5px] font-semibold hover:border-text-tertiary transition-colors whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <svg
+                    width="11"
+                    height="11"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    className={updateChecking ? "animate-spin" : undefined}
+                  >
+                    <path d="M2 8a6 6 0 0110.3-4.2L14 2v4h-4M14 8a6 6 0 01-10.3 4.2L2 14v-4h4" />
+                  </svg>
+                  {updateChecking ? "확인 중…" : "업데이트 확인"}
+                </button>
+              </div>
+            </div>
           </div>
         </Card>
 

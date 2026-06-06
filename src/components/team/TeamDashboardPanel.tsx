@@ -121,6 +121,7 @@ export function TeamDashboardPanel({ teamId }: { teamId: string }) {
         </section>
 
         <CarouselCard
+          persistKey="madup-token-monitor:view:team:carousel"
           className="col-span-4"
           height={360}
           faces={[

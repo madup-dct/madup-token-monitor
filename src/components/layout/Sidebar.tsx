@@ -75,6 +75,7 @@ const NAV_ITEMS: NavItemDef[] = [
     to: "/team/company",
     labelKey: "nav.teamCompany",
     group: "team",
+    minRole: "admin",
     icon: (
       <svg
         viewBox="0 0 16 16"

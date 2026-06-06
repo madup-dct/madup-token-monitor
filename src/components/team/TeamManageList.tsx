@@ -6,12 +6,20 @@ import {
   fetchMyTeams,
   fetchTeamAggregates,
   fetchTeamMembers,
-  inviteToTeam,
+  inviteMembersToTeam,
+  removeTeamMember,
 } from "@/lib/teams";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { formatTokensCompact, formatUSD } from "@/lib/format";
 import { TeamDashboardPanel } from "@/components/team/TeamDashboardPanel";
-import type { Team } from "@/types/models";
+import { MemberInvitePicker } from "@/components/team/MemberInvitePicker";
+import type { Team, TeamMemberWithProfile } from "@/types/models";
+
+const TEAM_ROLE_RANK: Record<TeamMemberWithProfile["role"], number> = {
+  owner: 0,
+  admin: 1,
+  member: 2,
+};
 
 /// 팀 관리 — 리스트 뷰 + 드릴다운 뷰.
 /// URL: /team?tab=manage (리스트) 또는 /team?tab=manage&team=:id (상세).
@@ -196,8 +204,9 @@ function TeamListView({ onSelect }: { onSelect: (teamId: string) => void }) {
 function TeamDetail({ teamId, onBack }: { teamId: string; onBack: () => void }) {
   const qc = useQueryClient();
   const { user } = useAuthUser();
-  const [identifier, setIdentifier] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   const teamsQ = useQuery({
     queryKey: ["my_teams", user?.id ?? "anon"],
@@ -214,17 +223,43 @@ function TeamDetail({ teamId, onBack }: { teamId: string; onBack: () => void }) 
     queryFn: () => fetchTeamMembers(teamId),
     enabled: !!teamId,
   });
+  // 현재 사용자의 이 팀 내 역할 — owner/admin 만 강퇴 가능(RLS 도 동일하게 강제).
+  const myTeamRole = useMemo(
+    () => membersQ.data?.find((m) => m.user_id === user?.id)?.role ?? null,
+    [membersQ.data, user?.id]
+  );
+  const canManage = myTeamRole === "owner" || myTeamRole === "admin";
 
   const inviteMut = useMutation({
-    mutationFn: () => inviteToTeam(teamId, identifier.trim()),
-    onSuccess: () => {
-      setIdentifier("");
+    mutationFn: (userIds: string[]) => inviteMembersToTeam(teamId, userIds),
+    onSuccess: (added: number) => {
       setError(null);
+      setNotice(added > 0 ? `${added}명 초대했습니다` : "선택한 사용자는 이미 모두 멤버입니다");
+      qc.invalidateQueries({ queryKey: ["team_members", teamId] });
+      qc.invalidateQueries({ queryKey: ["team_members_usage", teamId] });
+      qc.invalidateQueries({ queryKey: ["team_members_usage_lb", teamId] });
+      qc.invalidateQueries({ queryKey: ["invite_candidates", teamId] });
+    },
+    onError: (e) => {
+      setNotice(null);
+      setError(e instanceof Error ? e.message : String(e));
+    },
+  });
+
+  const removeMut = useMutation({
+    mutationFn: (userId: string) => removeTeamMember(teamId, userId),
+    onSuccess: () => {
+      setConfirmingId(null);
+      setError(null);
+      setNotice("멤버를 제거했습니다");
       qc.invalidateQueries({ queryKey: ["team_members", teamId] });
       qc.invalidateQueries({ queryKey: ["team_members_usage", teamId] });
       qc.invalidateQueries({ queryKey: ["team_members_usage_lb", teamId] });
     },
-    onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+    onError: (e) => {
+      setNotice(null);
+      setError(e instanceof Error ? e.message : String(e));
+    },
   });
 
   return (
@@ -250,90 +285,120 @@ function TeamDetail({ teamId, onBack }: { teamId: string; onBack: () => void }) 
         ) : null}
       </div>
 
+      {/* 초대 — 자동완성 다중선택 (상단) */}
+      <div className="mc-card p-4">
+        <div className="text-[11px] font-bold tracking-[0.12em] uppercase text-text-tertiary mb-3">
+          멤버 초대
+        </div>
+        <MemberInvitePicker
+          teamId={teamId}
+          onInvite={(userIds) => inviteMut.mutate(userIds)}
+          isInviting={inviteMut.isPending}
+        />
+      </div>
+
       {error ? (
         <div className="text-[12px] text-rose-300 bg-rose-500/10 border border-rose-500/20 rounded-md px-3 py-2">
           {error}
+        </div>
+      ) : notice ? (
+        <div className="text-[12px] text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 rounded-md px-3 py-2">
+          {notice}
+        </div>
+      ) : null}
+
+      {/* 멤버 관리 — 강퇴 (팀 owner/admin 전용). RLS 가 서버에서도 권한 강제. */}
+      {canManage ? (
+        <div className="mc-card p-4">
+          <div className="text-[11px] font-bold tracking-[0.12em] uppercase text-text-tertiary mb-3">
+            멤버 관리
+          </div>
+          {membersQ.isLoading ? (
+            <div className="text-[12px] text-text-tertiary px-1">불러오는 중…</div>
+          ) : (membersQ.data ?? []).length === 0 ? (
+            <div className="text-[12px] text-text-tertiary px-1">멤버 없음</div>
+          ) : (
+            <ul className="flex flex-col">
+              {(membersQ.data ?? [])
+                .slice()
+                .sort((a, b) => TEAM_ROLE_RANK[a.role] - TEAM_ROLE_RANK[b.role])
+                .map((m) => {
+                  const name =
+                    m.profile?.name ??
+                    m.profile?.slack_handle ??
+                    m.profile?.email ??
+                    m.user_id;
+                  const removable = m.role !== "owner" && m.user_id !== user?.id;
+                  return (
+                    <li
+                      key={m.user_id}
+                      className="flex items-center gap-3 py-2.5 border-b border-hairline last:border-b-0"
+                    >
+                      {m.profile?.avatar_url ? (
+                        <img
+                          src={m.profile.avatar_url}
+                          alt={name}
+                          className="w-7 h-7 rounded-full object-cover shrink-0"
+                        />
+                      ) : (
+                        <div className="w-7 h-7 rounded-full bg-surface-2 shrink-0" />
+                      )}
+                      <div className="min-w-0 flex-1 leading-tight">
+                        <div className="text-[12.5px] font-semibold text-text-primary truncate">
+                          {name}
+                        </div>
+                        <div className="text-[11px] text-text-tertiary truncate mt-0.5">
+                          {m.profile?.email ?? "—"}
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-bold uppercase tracking-[0.06em] text-text-tertiary shrink-0">
+                        {m.role}
+                      </span>
+                      {removable ? (
+                        confirmingId === m.user_id ? (
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              disabled={removeMut.isPending}
+                              onClick={() => removeMut.mutate(m.user_id)}
+                              className="px-2.5 py-1 rounded-md bg-rose-500/15 text-rose-300 text-[11px] font-semibold disabled:opacity-50"
+                            >
+                              제거
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmingId(null)}
+                              className="px-2.5 py-1 rounded-md bg-surface-2 text-text-secondary text-[11px] font-semibold"
+                            >
+                              취소
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmingId(m.user_id)}
+                            aria-label={`${name} 제거`}
+                            title="팀에서 제거"
+                            className="mc-icon-btn shrink-0 text-text-tertiary hover:text-rose-300"
+                          >
+                            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                              <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" />
+                            </svg>
+                          </button>
+                        )
+                      ) : (
+                        <span className="w-7 shrink-0" />
+                      )}
+                    </li>
+                  );
+                })}
+            </ul>
+          )}
         </div>
       ) : null}
 
       {/* 팀 대시보드 — KPI + 멤버 리더보드 + 팀 MCP/플러그인 */}
       <TeamDashboardPanel teamId={teamId} />
-
-      {/* 초대 */}
-      <div className="mc-card p-4">
-        <div className="text-[11px] font-bold tracking-[0.12em] uppercase text-text-tertiary mb-3">
-          멤버 초대
-        </div>
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex flex-col gap-1 flex-1 min-w-[240px]">
-            <label className="text-[11px] text-text-tertiary">
-              Slack 핸들 또는 이메일
-            </label>
-            <input
-              type="text"
-              value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
-              placeholder="@madup-handle 또는 someone@madup.com"
-              className="px-3 py-2 rounded-md bg-surface-1 border border-hairline text-[12px] text-text-primary"
-            />
-          </div>
-          <button
-            type="button"
-            onClick={() => inviteMut.mutate()}
-            disabled={inviteMut.isPending || !identifier.trim()}
-            className="px-4 py-2 rounded-md bg-azure-bright text-[12px] font-semibold text-[#06122b] disabled:opacity-40"
-          >
-            {inviteMut.isPending ? "초대 중…" : "초대"}
-          </button>
-        </div>
-      </div>
-
-      {/* 멤버 리스트 */}
-      <div className="mc-card">
-        <div className="px-5 py-3 border-b border-hairline text-[11px] font-bold tracking-[0.12em] uppercase text-text-tertiary">
-          멤버
-        </div>
-        {membersQ.isLoading ? (
-          <div className="p-6 text-center text-text-tertiary text-[12px]">로딩 중…</div>
-        ) : (membersQ.data ?? []).length === 0 ? (
-          <div className="p-6 text-center text-text-tertiary text-[12px]">
-            멤버가 없습니다.
-          </div>
-        ) : (
-          <ul className="flex flex-col">
-            {(membersQ.data ?? []).map((m) => {
-              const name = m.profile?.name ?? m.profile?.slack_handle ?? m.user_id;
-              return (
-                <li
-                  key={m.user_id}
-                  className="flex items-center gap-3 px-5 py-3 border-t border-hairline first:border-t-0"
-                >
-                  {m.profile?.avatar_url ? (
-                    <img
-                      src={m.profile.avatar_url}
-                      alt={name}
-                      className="w-8 h-8 rounded-full object-cover shrink-0"
-                    />
-                  ) : (
-                    <div className="w-8 h-8 rounded-full bg-surface-2 shrink-0" />
-                  )}
-                  <div className="flex-1 min-w-0 leading-tight">
-                    <div className="text-[12.5px] font-semibold text-text-primary truncate">
-                      {name}
-                    </div>
-                    <div className="text-[11px] text-text-tertiary truncate mt-0.5">
-                      {m.profile?.email ?? "—"}
-                    </div>
-                  </div>
-                  <span className="shrink-0 text-[10px] tracking-[0.1em] uppercase font-bold text-text-tertiary">
-                    {m.role}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
     </div>
   );
 }

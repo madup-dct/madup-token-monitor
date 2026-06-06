@@ -53,8 +53,10 @@ function rangeStartDate(range: Range): string | null {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/// 본인 user_id 의 모든 디바이스 합산본 (usage_aggregates) 을 Point[] 로 합성.
-/// usage_aggregates PK 가 (user_id, date, source) 라 디바이스 무관 자동 합산.
+/// 본인 user_id 의 모든 디바이스 행 (usage_aggregates) 을 Point[] 로 합성.
+/// usage_aggregates PK 에 device_id 가 포함돼 기기별 행이 분리 저장되며,
+/// 여기서는 user_id 로만 필터해 전 기기 행을 가져온다 (기기당 같은 ts 의 점이
+/// 여러 개일 수 있고, 토큰 합산은 ts 버킷 단위로 소비처 차트에서 수행).
 /// cache 분리/시간단위/메시지수는 aggregates 에 없으므로 cache_read 에 잔여
 /// (total_tokens - input - output) 를 넣어 토큰 합계만 정합. 실패 시 null →
 /// 로컬 invoke fallback.
@@ -96,28 +98,64 @@ async function fetchMyAggregatedPoints(
   }
 }
 
-export function useTimeseries(
-  range: Range,
-  source?: string,
-  opts?: { preferLocal?: boolean },
-) {
-  // preferLocal: 시간별(hourly) 뷰 전용. Supabase usage_aggregates 는 일(day) 단위라
-  // 모든 점의 ts 가 날짜 자정(00:00)이 된다 → 시간별로 버킷하면 전량 00시에 몰린다.
-  // 로컬 get_timeseries 는 실제 이벤트 ts 를 시간 버킷으로 주므로 시간별은 로컬을 강제한다.
-  const preferLocal = opts?.preferLocal ?? false;
+export function useTimeseries(range: Range, source?: string) {
   return useQuery({
-    queryKey: ["timeseries", range, source, preferLocal ? "local" : "agg"],
+    queryKey: ["timeseries", range, source],
     queryFn: async () => {
       if (IS_MOCK) return delay(buildMockTimeseries(range, source));
       // 로그인 시 Supabase 합산본 우선 (다중 디바이스), 실패/비로그인 시 로컬.
-      if (!preferLocal) {
-        const agg = await fetchMyAggregatedPoints(range, source);
-        if (agg && agg.length > 0) return agg;
-      }
+      // 시간별(hourly) 차트는 일(day) 단위 usage_aggregates 가 부적합해 별도 useMyHourly 사용.
+      const agg = await fetchMyAggregatedPoints(range, source);
+      if (agg && agg.length > 0) return agg;
       return tauriInvoke<Point[]>("get_timeseries", {
         range,
         source: source ?? null,
       });
+    },
+    staleTime: 30_000,
+  });
+}
+
+// usage_hourly row (본인 user_id 만 RLS 로 SELECT 허용).
+interface MyHourlyRow {
+  hour_utc: string; // UTC 정시 버킷 ISO
+  input_tokens: number;
+  output_tokens: number;
+  cache_read: number;
+  cache_write: number;
+  cost_usd: number;
+}
+
+/// 본인 usage_hourly 를 직접 SELECT 해 Point[] 로 반환 (시간별 DB 소스).
+/// 다기기 사용자도 본인 전 기기 시간별 합계를 보게 하기 위함.
+/// PK (user_id,hour_utc,source,model,device_id) 라 한 hour 에 여러 행이 올 수 있으나,
+/// 소비처(Dashboard)의 aggregateByPeriod 가 hour 버킷으로 합산하므로 그대로 매핑한다.
+/// enabled=시간별 뷰일 때만 true. 실패/비로그인 시 [].
+export function useMyHourly(enabled: boolean) {
+  return useQuery<Point[]>({
+    queryKey: ["my_hourly"],
+    enabled,
+    queryFn: async () => {
+      if (IS_MOCK) return delay(buildMockTimeseries("1d"));
+      const { data: sess } = await supabase.auth.getSession();
+      const uid = sess.session?.user.id;
+      if (!uid) return [];
+      // 최근 2일 (오늘 시간별 + 자정 경계 여유). hour_utc 는 UTC ISO.
+      const since = new Date(Date.now() - 2 * 86_400_000).toISOString();
+      const { data, error } = await supabase
+        .from("usage_hourly")
+        .select("hour_utc,input_tokens,output_tokens,cache_read,cache_write,cost_usd")
+        .eq("user_id", uid)
+        .gte("hour_utc", since);
+      if (error || !data) return [];
+      return (data as MyHourlyRow[]).map((r) => ({
+        ts: Date.parse(r.hour_utc),
+        input_tokens: r.input_tokens,
+        output_tokens: r.output_tokens,
+        cache_read: r.cache_read,
+        cache_write: r.cache_write,
+        cost_usd: r.cost_usd,
+      }));
     },
     staleTime: 30_000,
   });

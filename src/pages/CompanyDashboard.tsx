@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { usePersistentState } from "@/lib/usePersistentState";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -9,6 +10,7 @@ import {
   type LeaderboardRange,
 } from "@/hooks/useUsage";
 import { useAuthUser } from "@/hooks/useAuthUser";
+import { roleAtLeast } from "@/hooks/useRole";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { RingMeter } from "@/components/ui/RingMeter";
 import { RankBarList } from "@/components/ui/RankBarList";
@@ -31,10 +33,16 @@ const PERIOD_SUFFIX: Record<LeaderboardRange, string> = {
 
 export default function CompanyDashboard() {
   const qc = useQueryClient();
-  const { user } = useAuthUser();
+  const { user, role } = useAuthUser();
   const navigate = useNavigate();
-  const [carouselIdx, setCarouselIdx] = useState(1); // 0=오늘 1=이번주 2=이번달
-  const [autoRotate, setAutoRotate] = useState(true);
+  const [carouselIdx, setCarouselIdx] = usePersistentState(
+    "madup-token-monitor:view:company:carouselIdx",
+    1,
+  ); // 0=오늘 1=이번주 2=이번달
+  const [autoRotate, setAutoRotate] = usePersistentState(
+    "madup-token-monitor:view:company:autoRotate",
+    true,
+  );
   const [refreshing, setRefreshing] = useState(false);
 
   const period = RANGES[carouselIdx];
@@ -112,6 +120,16 @@ export default function CompanyDashboard() {
       }))
       .sort((a, b) => b.value - a.value);
   }, [mySummary7]);
+
+  if (!roleAtLeast(role, "admin")) {
+    return (
+      <div className="px-7 pt-5 pb-8">
+        <div className="mc-card p-8 text-center text-text-tertiary text-[13px]">
+          사내 대시보드는 관리자(admin)만 접근할 수 있습니다.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="px-7 pt-6 pb-8">

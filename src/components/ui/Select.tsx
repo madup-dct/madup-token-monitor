@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { DropdownPortal } from "./DropdownPortal";
 
 export interface SelectOption {
   value: string;
@@ -74,17 +75,18 @@ export function Select({
           />
         </svg>
       </button>
-      {open && (
-        <div
-          ref={popoverRef}
-          role="listbox"
-          className="absolute z-20 mt-1 left-0 min-w-full rounded-md border border-hairline overflow-hidden"
-          style={{
-            background: "var(--color-surface-2)",
-            boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
-          }}
-        >
-          {options.map((opt) => {
+      <DropdownPortal
+        anchorRef={buttonRef}
+        open={open}
+        menuRef={popoverRef}
+        role="listbox"
+        className="rounded-md border border-hairline overflow-hidden"
+        style={{
+          background: "var(--color-surface-2)",
+          boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+        }}
+      >
+        {options.map((opt) => {
             const active = opt.value === value;
             return (
               <button
@@ -106,8 +108,7 @@ export function Select({
               </button>
             );
           })}
-        </div>
-      )}
+      </DropdownPortal>
     </div>
   );
 }
