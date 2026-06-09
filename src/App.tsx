@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { BrowserRouter, Routes, Route, useNavigate } from "react-router-dom";
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { invoke } from "@tauri-apps/api/core";
@@ -61,33 +61,84 @@ function Layout() {
   );
 }
 
-/// 로그인 시 1시간마다 사내 집계 sync. 모니터링 목적이라 opt-in 없이 항상 공유.
+const SYNC_INTERVAL_MS = 5 * 60 * 1000; // 주기 sync (기존 1h → 단축). 변경 즉시 반영은 usage-updated 이벤트가 담당.
+const EVENT_SYNC_THROTTLE_MS = 15_000; // usage-updated 이벤트 기반 sync 최소 간격 (Supabase 부하 가드).
+
+/// 로그인 시 주기 + 변경 이벤트 기반 사내 집계 sync. 모니터링 목적이라 opt-in 없이 항상 공유.
+/// watcher 가 새 사용량을 SQLite 에 쓰면 'usage-updated' 이벤트를 emit → 여기서 throttle 후
+/// syncAggregatesNow + 본인 쿼리 invalidate → 화면/트레이가 수초 내 갱신.
 function AggregateSyncDriver() {
+  const qc = useQueryClient();
   useEffect(() => {
     let cancelled = false;
     let interval: ReturnType<typeof setInterval> | undefined;
+    let trailing: ReturnType<typeof setTimeout> | undefined;
+    let unlisten: (() => void) | undefined;
+    let lastRun = 0;
+    let syncing = false; // 재진입 가드 — 전체 재업로드가 throttle 창보다 길어도 중복 실행 방지.
+
+    function invalidateMine() {
+      // 본인 사용량 파생 쿼리 — 동기화 후 즉시 refetch.
+      for (const key of ["summary", "timeseries", "heatmap", "my_device_count"]) {
+        qc.invalidateQueries({ queryKey: [key] });
+      }
+    }
 
     async function runOnce() {
-      if (cancelled) return;
+      if (cancelled || syncing) return;
+      syncing = true;
+      lastRun = Date.now();
       try {
         const { data: sessionData } = await supabase.auth.getSession();
         const userId = sessionData.session?.user.id;
-        if (!userId) return;
+        if (!userId) {
+          invalidateMine(); // 비로그인 — 로컬 fallback 쿼리만 갱신
+          return;
+        }
         await syncAggregatesNow();
+        if (!cancelled) invalidateMine();
       } catch (e) {
         console.warn("[aggregate-sync] failed:", e);
+      } finally {
+        syncing = false;
+      }
+    }
+
+    // usage-updated → leading+trailing throttle (최소 EVENT_SYNC_THROTTLE_MS 간격).
+    function onUsageUpdated() {
+      const elapsed = Date.now() - lastRun;
+      if (elapsed >= EVENT_SYNC_THROTTLE_MS) {
+        runOnce();
+      } else if (!trailing) {
+        trailing = setTimeout(() => {
+          trailing = undefined;
+          runOnce();
+        }, EVENT_SYNC_THROTTLE_MS - elapsed);
       }
     }
 
     const initial = setTimeout(runOnce, 5_000);
-    interval = setInterval(runOnce, 60 * 60 * 1000);
+    interval = setInterval(runOnce, SYNC_INTERVAL_MS);
+
+    // Tauri 환경에서만 이벤트 구독 (웹 미리보기엔 watcher 없음).
+    if ("__TAURI_INTERNALS__" in window) {
+      import("@tauri-apps/api/event")
+        .then(({ listen }) => listen("usage-updated", onUsageUpdated))
+        .then((un) => {
+          if (cancelled) un();
+          else unlisten = un;
+        })
+        .catch((e) => console.warn("[usage-updated] listen failed:", e));
+    }
 
     return () => {
       cancelled = true;
       clearTimeout(initial);
       if (interval) clearInterval(interval);
+      if (trailing) clearTimeout(trailing);
+      unlisten?.();
     };
-  }, []);
+  }, [qc]);
   return null;
 }
 

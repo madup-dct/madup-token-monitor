@@ -243,6 +243,10 @@ Leaderboard / Plugins (사내 집계 view)
   | 전사 유저 테이블 (권한·팀·토큰 정렬/필터/검색, 행→상세) | `@/components/team/UserFilterTable` | AdminAnalytics (사용량 분석) |
   | 사용자 리스트 모달 (엔터티→사용자 + 사용량, 행→상세) | `@/components/team/UserListModal` | AdminAnalytics (사용량 분석) |
   | Carousel 3D 회전 primitive (저수준) | `@/components/ui/PrismCarousel` | CarouselCard 내부, CompanyDashboard·MyTeamPanel(리더보드 carousel) |
+  | "오늘" 카드 하단 stat (라벨+큰 숫자+보조) | `@/components/dashboard/TodayStat` | Dashboard, UserDashboard |
+  | 미니 통계 카드 (eyebrow+큰 숫자+suffix+foot, colSpan) | `@/components/dashboard/MiniStatCard` | Dashboard, UserDashboard |
+  | 활성 카운트 dot grid (KPI rightAccessory) | `@/components/ui/DotGrid` | CompanyDashboard, MyTeamPanel |
+  | 기간 캐러셀 컨트롤 (이전/점/다음 + 자동 토글) | `@/components/ui/CarouselControls` | CompanyDashboard, MyTeamPanel (전체 슬라이드 헤더) |
   | Dropdown (single-select) | `@/components/ui/Select` | **모든 페이지** — native `<select>` 금지 |
 
   - 다른 페이지에서 비슷한 컴포넌트가 필요하면 → **공유 컴포넌트의 prop 슬롯/variant 를 확장**.

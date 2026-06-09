@@ -293,12 +293,13 @@ interface CompanyMcpRow {
 // 사내 MCP TOP 10 — Supabase RPC 사용. 비로그인/오류/빈 결과는 mock으로 대체해
 // MVP 시연 단계의 빈 화면을 방지한다. share_consent=true 유저가 1명이라도 있고
 // aggregator가 한 번 돌면 실제 데이터로 자동 swap.
-export function useCompanyTopMcp(rangeDays = 30) {
+export function useCompanyTopMcp(rangeDays = 30, range?: { start: string; end: string }) {
   return useQuery({
-    queryKey: ["company_top_mcp", rangeDays],
+    queryKey: ["company_top_mcp", rangeDays, range?.start ?? null, range?.end ?? null],
     queryFn: async (): Promise<McpUsage[]> => {
       const { data, error } = await supabase.rpc("get_top_mcp_servers", {
         range_days: rangeDays,
+        ...(range ? { p_start_date: range.start, p_end_date: range.end } : {}),
       });
       if (error) {
         console.warn("[company_top_mcp] RPC error, falling back to mock:", error.message);
@@ -321,12 +322,13 @@ interface CompanyPluginRow {
   total_count: number;
 }
 
-export function useCompanyTopPlugins(rangeDays = 30) {
+export function useCompanyTopPlugins(rangeDays = 30, range?: { start: string; end: string }) {
   return useQuery({
-    queryKey: ["company_top_plugins", rangeDays],
+    queryKey: ["company_top_plugins", rangeDays, range?.start ?? null, range?.end ?? null],
     queryFn: async (): Promise<PluginUsage[]> => {
       const { data, error } = await supabase.rpc("get_top_plugins", {
         range_days: rangeDays,
+        ...(range ? { p_start_date: range.start, p_end_date: range.end } : {}),
       });
       if (error) {
         console.warn("[company_top_plugins] RPC error:", error.message);
@@ -502,11 +504,14 @@ export interface DirectoryRow {
 }
 
 /// 전사 유저 디렉토리 (권한/팀/토큰/비용). manager+ 가드 RPC.
-export function useDirectory(rangeDays = 30) {
+export function useDirectory(rangeDays = 30, range?: { start: string; end: string }) {
   return useQuery<DirectoryRow[], Error>({
-    queryKey: ["directory", rangeDays],
+    queryKey: ["directory", rangeDays, range?.start ?? null, range?.end ?? null],
     queryFn: async () => {
-      const { data, error } = await supabase.rpc("get_directory", { p_range_days: rangeDays });
+      const { data, error } = await supabase.rpc("get_directory", {
+        p_range_days: rangeDays,
+        ...(range ? { p_start_date: range.start, p_end_date: range.end } : {}),
+      });
       if (error) throw new Error(error.message);
       return ((data ?? []) as DirectoryRow[]).map((r) => ({
         ...r,
@@ -532,9 +537,10 @@ export function useEntityUsers(
   kind: "mcp" | "plugin" | null,
   entity: string | null,
   rangeDays = 30,
+  range?: { start: string; end: string },
 ) {
   return useQuery<EntityUserRow[], Error>({
-    queryKey: ["entity_users", kind, entity, rangeDays],
+    queryKey: ["entity_users", kind, entity, rangeDays, range?.start ?? null, range?.end ?? null],
     enabled: !!kind && !!entity,
     queryFn: async () => {
       if (!kind || !entity) return [];
@@ -545,6 +551,7 @@ export function useEntityUsers(
       const { data, error } = await supabase.rpc(rpc.fn, {
         [rpc.arg]: entity,
         p_range_days: rangeDays,
+        ...(range ? { p_start_date: range.start, p_end_date: range.end } : {}),
       });
       if (error) throw new Error(error.message);
       return ((data ?? []) as Record<string, unknown>[]).map((r) => ({

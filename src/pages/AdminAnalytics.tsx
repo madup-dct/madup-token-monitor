@@ -12,17 +12,23 @@ import { CarouselCard } from "@/components/dashboard/CarouselCard";
 import { RankBarList } from "@/components/ui/RankBarList";
 import { Segmented } from "@/components/ui/Segmented";
 import { MultiLineChart } from "@/components/charts/MultiLineChart";
-import { Select } from "@/components/ui/Select";
+import { DateRangePicker, type DateRange } from "@/components/ui/DateRangePicker";
 import { UserFilterTable } from "@/components/team/UserFilterTable";
 import { UserListModal } from "@/components/team/UserListModal";
 import { formatTokensCompact } from "@/lib/format";
 import { usePersistentState } from "@/lib/usePersistentState";
 
-const RANGE_OPTIONS = [
-  { value: "7", label: "최근 7일" },
-  { value: "30", label: "최근 30일" },
-  { value: "90", label: "최근 90일" },
-];
+function ymdLocal(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+/// 기본 조회 범위 — 최근 30일(오늘 포함). 저장값이 없을 때만 사용.
+function defaultRange(): DateRange {
+  const end = new Date();
+  end.setHours(0, 0, 0, 0);
+  const start = new Date(end);
+  start.setDate(end.getDate() - 29);
+  return { start: ymdLocal(start), end: ymdLocal(end) };
+}
 
 type EntityModal = { kind: "mcp" | "plugin"; entity: string; label: string };
 
@@ -161,9 +167,9 @@ function buildUsageChart(
 /// 매니저 전용 사용량 분석 — 사원 토큰 추이(평균/최대/최소) + 전사 유저 테이블 + MCP/플러그인별 사용자.
 export default function AdminAnalytics() {
   const role = useCurrentRole();
-  const [days, setDays] = usePersistentState(
-    "madup-token-monitor:view:admin:days",
-    30,
+  const [range, setRange] = usePersistentState<DateRange>(
+    "madup-token-monitor:view:admin:range",
+    defaultRange(),
   );
   const [gran, setGran] = usePersistentState<Gran>(
     "madup-token-monitor:view:admin:gran",
@@ -171,10 +177,11 @@ export default function AdminAnalytics() {
   );
   const [modal, setModal] = useState<EntityModal | null>(null);
 
-  const dir = useDirectory(days);
-  const mcp = useCompanyTopMcp(days);
-  const plugins = useCompanyTopPlugins(days);
-  const entityUsers = useEntityUsers(modal?.kind ?? null, modal?.entity ?? null, days);
+  // 선택한 날짜 범위(start~end)로 조회. rangeDays(30)는 범위 미지정 시 fallback일 뿐, range가 우선.
+  const dir = useDirectory(30, range);
+  const mcp = useCompanyTopMcp(30, range);
+  const plugins = useCompanyTopPlugins(30, range);
+  const entityUsers = useEntityUsers(modal?.kind ?? null, modal?.entity ?? null, 30, range);
   const usageByUser = useCompanyUsageByUser(365);
   const hourlyByUser = useCompanyHourlyByUser(48, gran === "hourly");
 
@@ -182,15 +189,6 @@ export default function AdminAnalytics() {
   const chart = useMemo(
     () => buildUsageChart(gran, usageByUser.data ?? [], hourlyByUser.data ?? []),
     [gran, usageByUser.data, hourlyByUser.data],
-  );
-
-  const distribution = useMemo(
-    () =>
-      (dir.data ?? [])
-        .filter((r) => r.total_tokens > 0)
-        .slice(0, 12)
-        .map((r) => ({ label: r.display_name, value: r.total_tokens })),
-    [dir.data],
   );
 
   if (!roleAtLeast(role, "manager")) {
@@ -213,12 +211,7 @@ export default function AdminAnalytics() {
             사원 토큰 추이 · 전사 유저 · MCP/플러그인 사용자 (매니저 전용)
           </p>
         </div>
-        <Select
-          value={String(days)}
-          onChange={(v) => setDays(Number(v))}
-          options={RANGE_OPTIONS}
-          ariaLabel="기간 선택"
-        />
+        <DateRangePicker value={range} onChange={setRange} ariaLabel="조회 기간 선택" />
       </div>
 
       {dir.error ? (
@@ -259,23 +252,9 @@ export default function AdminAnalytics() {
         )}
       </section>
 
-      {/* 유저 테이블 (col-8) + 사원별 분포 (col-4) */}
-      <div className="grid grid-cols-12 gap-4 mb-4">
-        <div className="col-span-8">
-          <UserFilterTable rows={dir.data ?? []} isLoading={dir.isLoading} error={dir.error ?? null} />
-        </div>
-        <section className="mc-card col-span-4">
-          <header className="mb-3 flex items-baseline justify-between">
-            <span className="text-[15px] font-semibold text-text-primary">사원별 토큰 분포</span>
-            <span className="text-[11px] text-text-tertiary">상위 12명</span>
-          </header>
-          <RankBarList
-            items={distribution}
-            formatValue={(v) => formatTokensCompact(v)}
-            maxRows={12}
-            emptyMessage={dir.isLoading ? "로딩 중…" : "데이터 없음"}
-          />
-        </section>
+      {/* 전사 유저 테이블 (전폭) — 토큰 컬럼에 분포 게이지가 인라인 통합됨 */}
+      <div className="mb-4">
+        <UserFilterTable rows={dir.data ?? []} isLoading={dir.isLoading} error={dir.error ?? null} />
       </div>
 
       {/* 엔터티별 사용자 (행 클릭 → 사용자 리스트 모달) */}

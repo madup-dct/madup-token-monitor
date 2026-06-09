@@ -17,6 +17,8 @@ import { useAuthUser } from "@/hooks/useAuthUser";
 import { usePersistentState } from "@/lib/usePersistentState";
 import { PeriodChartCard } from "@/components/dashboard/PeriodChartCard";
 import { CarouselCard } from "@/components/dashboard/CarouselCard";
+import { TodayStat } from "@/components/dashboard/TodayStat";
+import { MiniStatCard } from "@/components/dashboard/MiniStatCard";
 import { HeatMap } from "@/components/HeatMap";
 import { RankBarList } from "@/components/ui/RankBarList";
 import { MiniBarList } from "@/components/ui/MiniBarList";
@@ -939,32 +941,6 @@ function formatRelativeShort(ms: number): string {
   return `${Math.floor(ms / 86_400_000)}일`;
 }
 
-interface TodayStatProps {
-  label: string;
-  value: string;
-  sub: React.ReactNode;
-  color: "amber" | "azure" | "violet" | "lime";
-}
-function TodayStat({ label, value, sub, color }: TodayStatProps) {
-  const colorClass = {
-    amber: "text-amber",
-    azure: "text-azure",
-    violet: "text-violet",
-    lime: "text-lime",
-  }[color];
-  return (
-    <div>
-      <div className="text-[10.5px] font-bold tracking-[0.14em] uppercase text-text-tertiary mb-2 whitespace-nowrap">
-        {label}
-      </div>
-      <div className={`num text-[22px] font-medium leading-tight tracking-[-0.01em] ${colorClass}`}>
-        {value}
-      </div>
-      <div className="text-[11px] text-text-tertiary mt-1">{sub}</div>
-    </div>
-  );
-}
-
 interface QuotaRowProps {
   name: string;
   sub?: string;
@@ -1001,41 +977,6 @@ function QuotaRow({ name, sub, meta, value, hint }: QuotaRowProps) {
     </div>
   );
 }
-
-interface MiniStatProps {
-  eyebrow: string;
-  value: string;
-  suffix: string;
-  subline: React.ReactNode;
-  foot: { label: string; value: string }[];
-}
-function MiniStatCard({ eyebrow, value, suffix, subline, foot }: MiniStatProps) {
-  return (
-    <section className="mc-card col-span-3">
-      <header className="mb-1">
-        <span className="mc-eyebrow">{eyebrow}</span>
-      </header>
-      <div className="mt-3 flex items-baseline gap-2">
-        <span className="num text-[36px] font-medium leading-none tracking-[-0.02em] text-azure">
-          {value}
-        </span>
-        <span className="text-[12px] text-text-secondary">{suffix}</span>
-      </div>
-      <div className="text-[11px] text-text-tertiary mt-1.5">{subline}</div>
-      <div className="mt-3.5 pt-3 border-t border-hairline flex gap-3.5 text-[11px] text-text-tertiary">
-        {foot.map((f) => (
-          <span key={f.label}>
-            <strong className="num text-text-secondary font-semibold mr-1">
-              {f.value}
-            </strong>
-            {f.label}
-          </span>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 
 // KpiCard import 사용처 없는 경우 빈 wrapper 임포트로 만들지 않게 leave-out:
 // (실제로 KpiCard 는 future use 를 위해 export 만 됨.)

@@ -5,6 +5,7 @@ import {
   avgTokensPerActiveDay,
   tickY,
   projectedMinutesToLimit,
+  topKValues,
 } from "./usage-math";
 
 describe("pctDiff", () => {
@@ -90,5 +91,24 @@ describe("tickY (U3 — y축 눈금 좌표 역전 교정)", () => {
   it("maxVal 0 이면 padTop, 값이 maxVal 초과 시 클램프", () => {
     expect(tickY(50, 0, padTop, innerH)).toBe(padTop);
     expect(tickY(150, maxVal, padTop, innerH)).toBe(padTop);
+  });
+});
+
+describe("topKValues (KPI 스파크라인 상위 k)", () => {
+  it("내림차순 상위 k 개 반환", () => {
+    expect(topKValues([3, 1, 2], 2)).toEqual([3, 2]);
+    expect(topKValues([5, 9, 1, 7], 3)).toEqual([9, 7, 5]);
+  });
+  it("k 가 길이 이상이면 전체를 내림차순으로", () => {
+    expect(topKValues([1, 2], 5)).toEqual([2, 1]);
+  });
+  it("빈 배열/0 은 빈 배열", () => {
+    expect(topKValues([], 3)).toEqual([]);
+    expect(topKValues([4, 2], 0)).toEqual([]);
+  });
+  it("원본 배열을 변형하지 않음(불변)", () => {
+    const src = [3, 1, 2];
+    topKValues(src, 2);
+    expect(src).toEqual([3, 1, 2]);
   });
 });

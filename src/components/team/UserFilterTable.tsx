@@ -75,6 +75,12 @@ export function UserFilterTable({
     return out;
   }, [rows, query, roleFilter, teamFilter, sortKey, asc]);
 
+  // 토큰 게이지 스케일 — 전체 행의 최댓값 기준(분포 카드와 동일 의미). 0 나눗셈 방지로 최소 1.
+  const tokenMax = useMemo(
+    () => Math.max(1, ...rows.map((r) => r.total_tokens)),
+    [rows],
+  );
+
   function toggleSort(k: SortKey) {
     if (sortKey === k) setAsc((v) => !v);
     else {
@@ -157,8 +163,23 @@ export function UserFilterTable({
                     <td className="px-3 py-2.5 text-[12px] text-text-secondary whitespace-nowrap">
                       {r.teams ?? "—"}
                     </td>
-                    <td className="px-3 py-2.5 text-right text-[12px] text-azure tabular-nums whitespace-nowrap">
-                      {formatTokensCompact(r.total_tokens)}
+                    <td className="px-3 py-2.5 whitespace-nowrap">
+                      {/* 토큰 값 + 최댓값 대비 게이지바 (구 '사원별 토큰 분포' 카드 통합) */}
+                      <div className="flex flex-col items-end gap-1 min-w-[120px]">
+                        <span className="text-[12px] text-azure tabular-nums">
+                          {formatTokensCompact(r.total_tokens)}
+                        </span>
+                        <div className="w-full h-1 rounded-full bg-surface-3 overflow-hidden">
+                          <div
+                            className="h-full rounded-full"
+                            style={{
+                              width: `${Math.max(2, (r.total_tokens / tokenMax) * 100)}%`,
+                              background:
+                                "linear-gradient(90deg, var(--color-azure-deep), var(--color-azure))",
+                            }}
+                          />
+                        </div>
+                      </div>
                     </td>
                     <td className="px-3 py-2.5 text-right text-[12px] text-amber tabular-nums whitespace-nowrap">
                       {formatUSD(r.total_cost)}

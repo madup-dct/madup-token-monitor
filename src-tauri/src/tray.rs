@@ -89,10 +89,11 @@ pub fn refresh_tray_title<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// 1분마다 오늘(local-tz) USD 비용을 읽어 트레이 타이틀에 반영.
+/// 30초마다 오늘(local-tz) USD 비용을 읽어 트레이 타이틀에 반영 (폴백).
+/// 실시간 갱신은 watcher 가 파싱 직후 refresh_tray_title 을 직접 호출한다.
 pub fn spawn_title_updater<R: Runtime>(app: AppHandle<R>) {
     std::thread::spawn(move || loop {
         refresh_tray_title(&app);
-        std::thread::sleep(std::time::Duration::from_secs(60));
+        std::thread::sleep(std::time::Duration::from_secs(30));
     });
 }

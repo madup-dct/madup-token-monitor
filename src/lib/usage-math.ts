@@ -54,3 +54,8 @@ export function tickY(
   const frac = Math.min(1, Math.max(0, 1 - tickValue / maxVal));
   return padTop + innerH * frac;
 }
+
+/// 상위 k 개 값 (내림차순). KPI 스파크라인 등에서 분포 상단만 표시할 때.
+export function topKValues(values: number[], k: number): number[] {
+  return [...values].sort((a, b) => b - a).slice(0, k);
+}

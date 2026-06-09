@@ -67,8 +67,8 @@ use tauri_plugin_deep_link::DeepLinkExt;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let _watcher = watcher::FileWatcher::start().ok();
-
+    // FileWatcher 는 AppHandle(usage-updated emit + 트레이 즉시 갱신)이 필요하므로
+    // 아래 setup() 에서 app.handle() 을 받아 시작한다.
     tauri::Builder::default()
         // 두 번째 instance가 실행되려 하면 기존 윈도우를 활성화하고 종료한다.
         // Windows/Linux 딥링크 forwarding: single-instance 의 `deep-link` feature 가
@@ -113,6 +113,14 @@ pub fn run() {
         .setup(|app| {
             tray::setup_tray(app.handle())?;
             tray::spawn_title_updater(app.handle().clone());
+
+            // 파일 워처 — JSONL → SQLite 파싱 후 usage-updated 이벤트 emit + 트레이 즉시 갱신.
+            // 반환된 워처는 앱 수명 동안 살아있어야 감시가 유지된다. RecommendedWatcher 가
+            // Sync 가 아닐 수 있어 app.manage() 대신 leak 으로 프로세스 수명까지 보존한다(1회).
+            match watcher::FileWatcher::start(app.handle().clone()) {
+                Ok(w) => std::mem::forget(w),
+                Err(e) => eprintln!("file watcher start failed: {e}"),
+            }
 
             // 사내 전용 앱 — 로그인 시 항상 자동 실행 (사용자 선택 없음). 매 실행마다 보장.
             {
