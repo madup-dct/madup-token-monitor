@@ -249,10 +249,14 @@ pub fn get_summary(range: String) -> Result<Summary, String> {
                 model: m,
                 input_tokens: 0,
                 output_tokens: 0,
+                cache_read: 0,
+                cache_write: 0,
                 cost_usd: 0.0,
             });
             me.input_tokens += inp;
             me.output_tokens += out;
+            me.cache_read += cr;
+            me.cache_write += cw;
             me.cost_usd += cost;
         }
     }

@@ -33,9 +33,9 @@ export function buildMockSummary(range: Range): Summary {
       { source: "api", input_tokens: Math.floor(inp * 0.15), output_tokens: Math.floor(out * 0.15), cost_usd: cost * 0.15 },
     ],
     by_model: [
-      { model: "claude-opus-4-7", input_tokens: Math.floor(inp * 0.4), output_tokens: Math.floor(out * 0.4), cost_usd: cost * 0.5 },
-      { model: "claude-sonnet-4-6", input_tokens: Math.floor(inp * 0.45), output_tokens: Math.floor(out * 0.45), cost_usd: cost * 0.35 },
-      { model: "claude-haiku-4-5", input_tokens: Math.floor(inp * 0.15), output_tokens: Math.floor(out * 0.15), cost_usd: cost * 0.15 },
+      { model: "claude-opus-4-7", input_tokens: Math.floor(inp * 0.4), output_tokens: Math.floor(out * 0.4), cache_read: Math.floor(cr * 0.4), cache_write: Math.floor(cw * 0.4), cost_usd: cost * 0.5 },
+      { model: "claude-sonnet-4-6", input_tokens: Math.floor(inp * 0.45), output_tokens: Math.floor(out * 0.45), cache_read: Math.floor(cr * 0.45), cache_write: Math.floor(cw * 0.45), cost_usd: cost * 0.35 },
+      { model: "claude-haiku-4-5", input_tokens: Math.floor(inp * 0.15), output_tokens: Math.floor(out * 0.15), cache_read: Math.floor(cr * 0.15), cache_write: Math.floor(cw * 0.15), cost_usd: cost * 0.15 },
     ],
   };
 }

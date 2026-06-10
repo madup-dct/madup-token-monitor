@@ -87,13 +87,13 @@ export default function CompanyDashboard() {
   const totalPluginUses = pluginRows.reduce((a, r) => a + r.count, 0);
   const totalCalls = totalMcpCalls + totalPluginUses;
 
-  // 모델별 토큰 (내 7일) — 30일 무관, 모든 면 공통.
+  // 모델별 토큰 (내 7일) — 30일 무관, 모든 면 공통. 캐시 포함(Dashboard 와 동일 기준).
   const myModelItems = useMemo(() => {
     if (!mySummary7) return [] as { label: string; value: number }[];
     return mySummary7.by_model
       .map((m) => ({
         label: m.model.replace("claude-", ""),
-        value: m.input_tokens + m.output_tokens,
+        value: m.input_tokens + m.output_tokens + m.cache_read + m.cache_write,
       }))
       .sort((a, b) => b.value - a.value);
   }, [mySummary7]);

@@ -62,6 +62,8 @@ pub struct ModelSummary {
     pub model: String,
     pub input_tokens: i64,
     pub output_tokens: i64,
+    pub cache_read: i64,
+    pub cache_write: i64,
     pub cost_usd: f64,
 }
 

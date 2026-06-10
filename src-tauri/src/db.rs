@@ -104,7 +104,48 @@ fn migrate(conn: &Connection) -> Result<()> {
         );
     }
 
+    // ── cost=0 이벤트 재계산 ────────────────────────────────────────────────
+    // 단가표에 없던 신규 모델(예: claude-fable-5)이 cost_usd=0 으로 적재된 이벤트를
+    // 현재 단가표로 보정. 단가가 여전히 없는 모델(<synthetic> 등)은 0 유지라 idempotent.
+    let _ = recalc_zero_cost_events(conn);
+
     Ok(())
+}
+
+/// cost_usd=0 으로 기록된 이벤트를 현재 단가표 기준으로 재계산.
+/// 단가 매칭 실패로 0 이었던 모델이 이후 pricing.json 에 추가되면 여기서 소급 보정된다.
+fn recalc_zero_cost_events(conn: &Connection) -> Result<usize> {
+    let mut stmt = conn.prepare(
+        "SELECT id, model, COALESCE(input_tokens,0), COALESCE(output_tokens,0),
+                COALESCE(cache_read,0), COALESCE(cache_write,0),
+                COALESCE(cache_write_5m,0), COALESCE(cache_write_1h,0)
+         FROM usage_events
+         WHERE (cost_usd = 0 OR cost_usd IS NULL) AND model IS NOT NULL AND model != ''",
+    )?;
+    let rows: Vec<(i64, String, i64, i64, i64, i64, i64, i64)> = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?,
+                r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?,
+            ))
+        })?
+        .flatten()
+        .collect();
+
+    let mut fixed = 0;
+    for (id, model, inp, out, cr, cw, cw5, cw1) in rows {
+        // 5m/1h 분리 컬럼이 비어 있는 옛 이벤트는 cache_write 전체를 5m(1.25x, 보수적)로 간주.
+        let (cw5, cw1) = if cw5 == 0 && cw1 == 0 { (cw, 0) } else { (cw5, cw1) };
+        let cost = crate::pricing::calc_cost_usd(&model, inp, out, cr, cw5, cw1);
+        if cost > 0.0 {
+            conn.execute(
+                "UPDATE usage_events SET cost_usd = ?1 WHERE id = ?2",
+                params![cost, id],
+            )?;
+            fixed += 1;
+        }
+    }
+    Ok(fixed)
 }
 
 pub fn insert_usage_event(conn: &Connection, e: &UsageEvent) -> Result<()> {
@@ -159,4 +200,56 @@ pub fn range_bounds(range: &str) -> (i64, i64) {
         _ => midnight_ms(today_local),
     };
     (start, now)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE usage_events (
+                id INTEGER PRIMARY KEY, source TEXT NOT NULL, model TEXT, ts INTEGER NOT NULL,
+                input_tokens INTEGER, output_tokens INTEGER, cache_read INTEGER, cache_write INTEGER,
+                cache_write_5m INTEGER, cache_write_1h INTEGER, cost_usd REAL,
+                project TEXT, session_id TEXT, message_id TEXT, request_id TEXT
+            );",
+        )
+        .unwrap();
+        conn
+    }
+
+    // 회귀: 단가표 누락으로 cost=0 적재된 fable 이벤트가 소급 보정되는지.
+    #[test]
+    fn test_recalc_zero_cost_events() {
+        let conn = test_conn();
+        conn.execute_batch(
+            "INSERT INTO usage_events (source, model, ts, input_tokens, output_tokens, cache_read, cache_write, cache_write_5m, cache_write_1h, cost_usd)
+             VALUES ('claude', 'claude-fable-5', 1, 1000000, 0, 0, 0, 0, 0, 0.0),
+                    ('claude', '<synthetic>', 2, 1000000, 0, 0, 0, 0, 0, 0.0),
+                    ('claude', 'claude-fable-5', 3, 0, 0, 0, 1000000, 0, 0, 0.0),
+                    ('claude', 'claude-opus-4-8', 4, 1000000, 0, 0, 0, 0, 0, 5.0);",
+        )
+        .unwrap();
+
+        let fixed = recalc_zero_cost_events(&conn).unwrap();
+        assert_eq!(fixed, 2, "fable 2건만 보정 (<synthetic> 0 유지, 기존 cost>0 미변경)");
+
+        let fable: f64 = conn
+            .query_row("SELECT cost_usd FROM usage_events WHERE ts = 1", [], |r| r.get(0))
+            .unwrap();
+        assert!((fable - 10.0).abs() < 0.001, "fable input 1M → $10, got {fable}");
+
+        // 5m/1h 미분리 cache_write 는 5m(1.25x) 보수 처리: 1M * $10 * 1.25 = $12.5
+        let cache_only: f64 = conn
+            .query_row("SELECT cost_usd FROM usage_events WHERE ts = 3", [], |r| r.get(0))
+            .unwrap();
+        assert!((cache_only - 12.5).abs() < 0.001, "cache_write fallback, got {cache_only}");
+
+        let synthetic: f64 = conn
+            .query_row("SELECT cost_usd FROM usage_events WHERE ts = 2", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(synthetic, 0.0, "단가 없는 모델은 0 유지");
+    }
 }

@@ -176,6 +176,20 @@ mod tests {
         assert!((dated - 30.0).abs() < 0.001, "opus-4-8 dated cost={dated} (expected 5+25=30, not 15+75=90)");
     }
 
+    // 회귀: Fable 5 는 $10/$50. 단가표에 키가 없으면 어떤 fallback 에도 안 잡혀
+    // cost=0 으로 집계됐다 (2026-06 전사 7명 $0 누락 사고).
+    #[test]
+    fn test_calc_cost_fable_5_not_zero() {
+        let bare = calc_cost_usd("claude-fable-5", 1_000_000, 1_000_000, 0, 0, 0);
+        assert!((bare - 60.0).abs() < 0.001, "fable-5 cost={bare} (expected 10+50=60, not 0)");
+        // [1m] 컨텍스트 변형도 prefix 매칭으로 잡혀야 함
+        let variant = calc_cost_usd("claude-fable-5[1m]", 1_000_000, 0, 0, 0, 0);
+        assert!((variant - 10.0).abs() < 0.001, "fable-5[1m] cost={variant} (expected 10.0)");
+        // 미래 fable-N 도 generic claude-fable 로 $10 fallback
+        let future = calc_cost_usd("claude-fable-6", 1_000_000, 0, 0, 0, 0);
+        assert!((future - 10.0).abs() < 0.001, "fable-6 cost={future} (expected 10.0)");
+    }
+
     // 레거시 Opus 4.1 은 여전히 $15/$75 (명시 키 보존 확인)
     #[test]
     fn test_calc_cost_opus_4_1_legacy_price() {

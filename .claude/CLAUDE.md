@@ -196,6 +196,15 @@ git push origin v0.1.x
 - macOS popover + `decorations: false` 환경에서 `data-tauri-drag-region` 이 의도대로 작동하지 않아
   현재는 의도적으로 비활성화. 트레이 위치에 고정되어 보여주는 것이 자연스럽다.
 
+### 6.8 신규 모델 출시 시 pricing.json 키 누락 → cost $0 적재
+- 단가표(`src-tauri/pricing.json`)에 없는 모델은 `calc_cost_usd` 가 0 을 반환해
+  로컬·Supabase 모두 비용 0 으로 집계된다 (2026-06 claude-fable-5 사고: 전사 7명 ~$600 누락).
+- **새 Claude/GPT/Gemini 모델 출시 시 pricing.json 에 키 추가 + 세대 generic 키 유지**
+  (예: `claude-fable`). `pricing.rs` 에 회귀 테스트 패턴 있음.
+- `db.rs::recalc_zero_cost_events` 가 앱 시작 시 cost=0 이벤트를 현재 단가표로 소급 보정
+  → 단가 추가 후 릴리즈하면 각 기기 로컬 DB 가 자동 치유되고 다음 sync 가 Supabase 를 덮어쓴다.
+  Supabase 직접 UPDATE 는 금물 — hourly sync(최근 30일, merge-duplicates 치환)가 되돌린다.
+
 ## 7. 데이터 흐름 (요약)
 
 ```

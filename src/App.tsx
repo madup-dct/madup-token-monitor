@@ -20,7 +20,6 @@ import { handleAuthCallback, syncAggregatesNow } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TitleBar } from "@/components/layout/TitleBar";
-import { UpdateNotifier } from "@/components/UpdateNotifier";
 
 // 캐시를 localStorage에 영속화 — 앱 재시작 시 옛 데이터를 즉시 표시하고 백그라운드 refetch.
 const queryClient = new QueryClient({
@@ -247,7 +246,6 @@ export default function App() {
         <ShowWindowOnReady />
         <DeepLinkBridge />
         <AggregateSyncDriver />
-        <UpdateNotifier />
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/*" element={<Layout />} />

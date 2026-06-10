@@ -24,6 +24,8 @@ export interface ModelSummary {
   model: string;
   input_tokens: number;
   output_tokens: number;
+  cache_read: number;
+  cache_write: number;
   cost_usd: number;
 }
 

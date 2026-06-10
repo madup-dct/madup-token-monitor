@@ -409,10 +409,12 @@ export function Dashboard() {
     .map((s) => ({ label: s.source, value: s.cost_usd }))
     .sort((a, b) => b.value - a.value);
   // DB 미보유 차원 — 로컬 유지(모델별 토큰 미니바). usage_aggregates 에 model 차원 없음.
+  // 다른 카드와 동일하게 캐시 포함 — 입력+출력만 합산하면 캐시 비중이 99%라
+  // 값이 며칠씩 안 변하는 것처럼 보인다 (예: opus 5M 고정 이슈).
   const modelItems = summary7.by_model
     .map((m) => ({
       label: m.model.replace("claude-", ""),
-      value: m.input_tokens + m.output_tokens,
+      value: m.input_tokens + m.output_tokens + m.cache_read + m.cache_write,
     }))
     .sort((a, b) => b.value - a.value);
 

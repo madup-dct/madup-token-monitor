@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { roleAtLeast } from "@/hooks/useRole";
 import { signOut } from "@/lib/supabase";
+import { UpdateNotifier } from "@/components/UpdateNotifier";
 import type { AppRole } from "@/types/models";
 
 const ROLE_LABEL: Record<AppRole, string | null> = {
@@ -229,6 +230,8 @@ export function Sidebar() {
       </nav>
 
       <div className="flex-1" />
+
+      <UpdateNotifier />
 
       <div className="h-px bg-hairline mx-1" />
 
