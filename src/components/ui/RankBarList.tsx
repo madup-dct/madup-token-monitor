@@ -27,14 +27,6 @@ const FILL: Record<Variant, string> = {
   amber: "linear-gradient(90deg, var(--color-amber-deep), var(--color-amber))",
   coral: "linear-gradient(90deg, var(--color-coral-deep), var(--color-coral))",
 };
-const TEXT: Record<Variant, string> = {
-  azure: "text-azure",
-  violet: "text-violet",
-  lime: "text-lime",
-  amber: "text-amber",
-  coral: "text-coral",
-};
-
 const DEFAULT_VARIANTS: Variant[] = ["azure", "azure", "violet", "azure", "lime", "azure", "amber", "azure"];
 
 /// 랭크 글리프 + 라벨 + mono 값 + 5px gradient 막대. CompanyDashboard 의 MCP/플러그인/모델 분포용.
@@ -73,9 +65,9 @@ export function RankBarList({
                   {it.label}
                 </span>
               </span>
-              <span
-                className={`num text-[12px] font-medium whitespace-nowrap shrink-0 ${TEXT[variant]}`}
-              >
+              {/* 값 텍스트는 단일 색 — 랭크마다 색이 바뀌면 "값의 크기" 비교를 방해.
+                  카테고리 구분은 막대 gradient(variant)가 담당한다. */}
+              <span className="num text-[12px] font-medium whitespace-nowrap shrink-0 text-text-primary">
                 {formatValue(it.value)}
               </span>
             </div>

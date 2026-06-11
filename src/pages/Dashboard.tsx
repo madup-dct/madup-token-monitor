@@ -25,6 +25,7 @@ import { MiniBarList } from "@/components/ui/MiniBarList";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { Select } from "@/components/ui/Select";
+import { CarouselControls } from "@/components/ui/CarouselControls";
 import { QuotaSegBar, quotaSignalClass } from "@/components/ui/QuotaSegBar";
 import {
   formatTokensCompact,
@@ -34,7 +35,7 @@ import {
   formatRelativeTime,
 } from "@/lib/format";
 import { pctDiff, priorDaysAverage, avgTokensPerActiveDay, projectedMinutesToLimit } from "@/lib/usage-math";
-import { prettyToolName } from "@/lib/labels";
+import { prettyPluginId, prettyToolName } from "@/lib/labels";
 import type { Range, Point } from "@/types/models";
 
 const RANGES: { value: Range; label: string }[] = [
@@ -49,6 +50,13 @@ const GRANULARITIES: { value: Granularity; label: string }[] = [
   { value: "daily", label: "일자별" },
   { value: "weekly", label: "주별" },
   { value: "monthly", label: "월별" },
+];
+
+// 모델별 토큰 카드 캐러셀 면 — 로컬 get_summary 의 range 의미 그대로 (1d=오늘 자정부터).
+const MODEL_RANGES: { value: Range; label: string }[] = [
+  { value: "1d", label: "오늘" },
+  { value: "7d", label: "7일" },
+  { value: "30d", label: "30일" },
 ];
 
 function localDateKey(ts: number): string {
@@ -202,6 +210,15 @@ export function Dashboard() {
   // 뷰 토글 — 메뉴 이동/재시작 후에도 마지막 선택값 유지 (usePersistentState).
   const [dailyRange, setDailyRange] = usePersistentState<Range>("madup-token-monitor:dash:dailyRange", "7d");
   const [dailyGranularity, setDailyGranularity] = usePersistentState<Granularity>("madup-token-monitor:dash:dailyGranularity", "daily");
+  const [granularityAuto, setGranularityAuto] = usePersistentState(
+    "madup-token-monitor:view:dash:granularityAuto",
+    true,
+  );
+  // 모델별 토큰 카드 자체 캐러셀 (오늘/7일/30일) — 수동 전환 전용 (자동 회전 없음).
+  const [modelRange, setModelRange] = usePersistentState<Range>(
+    "madup-token-monitor:dash:modelRange",
+    "7d",
+  );
   const [selectedMonth, setSelectedMonth] = useState<string>("");
   const [selectedYear, setSelectedYear] = useState<string>("");
   const [dailyMetric, setDailyMetric] = usePersistentState<"tokens" | "cost">("madup-token-monitor:dash:dailyMetric", "tokens");
@@ -216,6 +233,21 @@ export function Dashboard() {
     return () => clearInterval(id);
   }, []);
 
+  // granularity 자동 회전 — 7초 주기로 순환 (CompanyDashboard 의 intervalMs=7000 과 동일).
+  // deps 에 dailyGranularity 포함: 수동 선택(점/화살표/회전) 직후 타이머가 리셋돼
+  // 선택하자마자 면이 강제 전환되는 일이 없다. hover 중에는 일시정지 (PrismCarousel 규약).
+  const [carouselHovered, setCarouselHovered] = useState(false);
+  useEffect(() => {
+    if (!granularityAuto || carouselHovered) return;
+    const id = setInterval(() => {
+      setDailyGranularity((prev) => {
+        const i = GRANULARITIES.findIndex((g) => g.value === prev);
+        return GRANULARITIES[(i + 1) % GRANULARITIES.length]!.value;
+      });
+    }, 7000);
+    return () => clearInterval(id);
+  }, [granularityAuto, carouselHovered, dailyGranularity, setDailyGranularity]);
+
   const { user } = useAuthUser();
   // DB 미보유 차원 — 로컬 유지(세션수/모델/소스비용/히트맵).
   const { data: summary30 } = useSummary("30d");
@@ -224,8 +256,9 @@ export function Dashboard() {
   const { data: tsDaily } = useTimeseries(dailyRange);
   // 오늘 KPI 토큰/비용을 DB 기준으로 계산 (다기기 합산). usage_aggregates 본인 전 기기.
   const { data: tsTodayDb } = useTimeseries("1d");
-  // 시간별(hourly) 차트 — DB(usage_hourly) 본인 전 기기. 시간별 뷰일 때만 fetch.
-  const { data: tsToday } = useMyHourly(dailyGranularity === "hourly");
+  // 시간별(hourly) 차트 — DB(usage_hourly) 본인 전 기기. 시간별 뷰 또는
+  // 자동 회전 중일 때 fetch (회전으로 시간별 면 진입 시 빈 차트 방지).
+  const { data: tsToday } = useMyHourly(dailyGranularity === "hourly" || granularityAuto);
   const { data: tsMonth } = useTimeseries("30d");
   const { data: tsAll } = useTimeseries("all");
   // DB 미보유 차원 — 로컬 유지(세션수/모델/소스비용/히트맵).
@@ -411,11 +444,16 @@ export function Dashboard() {
   // DB 미보유 차원 — 로컬 유지(모델별 토큰 미니바). usage_aggregates 에 model 차원 없음.
   // 다른 카드와 동일하게 캐시 포함 — 입력+출력만 합산하면 캐시 비중이 99%라
   // 값이 며칠씩 안 변하는 것처럼 보인다 (예: opus 5M 고정 이슈).
-  const modelItems = summary7.by_model
+  // <synthetic>(모델 없음, 토큰 0)·0값 모델은 자리만 차지 — 제외.
+  const modelSummary =
+    modelRange === "1d" ? summary1 : modelRange === "30d" ? summary30 : summary7;
+  const modelItems = (modelSummary?.by_model ?? [])
+    .filter((m) => m.model !== "<synthetic>")
     .map((m) => ({
       label: m.model.replace("claude-", ""),
       value: m.input_tokens + m.output_tokens + m.cache_read + m.cache_write,
     }))
+    .filter((m) => m.value > 0)
     .sort((a, b) => b.value - a.value);
 
   function copyDailyToClipboard() {
@@ -678,17 +716,33 @@ export function Dashboard() {
         </section>
 
         {/* ============ ROW 2: Daily breakdown (col-8) ============ */}
+        {/* display:contents — 그리드 배치는 PeriodChartCard 의 col-span 이 그대로 적용되고,
+            hover 이벤트만 버블링으로 받아 자동 회전을 일시정지한다. */}
+        <div
+          className="contents"
+          onMouseEnter={() => setCarouselHovered(true)}
+          onMouseLeave={() => setCarouselHovered(false)}
+        >
         <PeriodChartCard
           leftHeader={
             <>
               <span className="text-[15px] font-semibold text-text-primary tracking-[-0.005em]">
                 기간별 사용량
+                {/* CarouselCard 헤더의 활성 면 제목 패턴 — 현재 granularity 라벨을 작게 표시 */}
+                <span className="text-text-tertiary font-normal text-[12px] ml-1">
+                  {GRANULARITIES.find((g) => g.value === dailyGranularity)?.label}
+                </span>
               </span>
-              <Select
-                value={dailyGranularity}
-                onChange={(v) => setDailyGranularity(v as Granularity)}
-                options={GRANULARITIES}
-                ariaLabel="단위 선택"
+              <CarouselControls
+                count={GRANULARITIES.length}
+                activeIndex={Math.max(
+                  0,
+                  GRANULARITIES.findIndex((g) => g.value === dailyGranularity),
+                )}
+                onIndexChange={(i) => setDailyGranularity(GRANULARITIES[i]!.value)}
+                labels={GRANULARITIES.map((g) => g.label)}
+                auto={granularityAuto}
+                onAutoChange={setGranularityAuto}
               />
               {dailyGranularity === "hourly" ? null : dailyGranularity === "daily" ? (
                 <Select
@@ -733,6 +787,7 @@ export function Dashboard() {
           onCopy={copyDailyToClipboard}
           emptyText={t("dashboard.empty")}
         />
+        </div>
 
         {/* ============ ROW 2: Activity carousel (col-4) ============ */}
         <CarouselCard
@@ -794,7 +849,8 @@ export function Dashboard() {
                 <div className="h-full pr-1">
                   <RankBarList
                     items={(topPlugins ?? []).map((p) => ({
-                      label: p.plugin_id,
+                      label: prettyPluginId(p.plugin_id),
+                      title: p.plugin_id,
                       value: p.count,
                     }))}
                     formatValue={(v) => v.toLocaleString("ko-KR")}
@@ -878,8 +934,16 @@ export function Dashboard() {
         </section>
 
         <section className="mc-card col-span-3">
-          <header className="mb-3.5">
-            <span className="mc-eyebrow">모델별 토큰 · 7일</span>
+          <header className="mb-3.5 flex items-center justify-between gap-2 flex-wrap">
+            <span className="mc-eyebrow">
+              모델별 토큰 · {MODEL_RANGES.find((r) => r.value === modelRange)?.label}
+            </span>
+            <CarouselControls
+              count={MODEL_RANGES.length}
+              activeIndex={Math.max(0, MODEL_RANGES.findIndex((r) => r.value === modelRange))}
+              onIndexChange={(i) => setModelRange(MODEL_RANGES[i]!.value)}
+              labels={MODEL_RANGES.map((r) => r.label)}
+            />
           </header>
           <MiniBarList
             items={modelItems}

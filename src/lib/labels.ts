@@ -21,6 +21,21 @@ export function projectPath(encoded: string): string {
   return "/" + encoded.replace(/^-+/, "").split("-").filter(Boolean).join("/");
 }
 
+/// 플러그인 ID 표시 정규화.
+/// Claude Code 가 MCP 서버명을 길이 제한으로 절단하면서 "playwright_playwrig" 처럼
+/// 이름이 중복+잘린 ID 가 적재된다 (원본 복원 불가 — 식별 보조용 best-effort).
+/// `A_B` 에서 B 가 A 의 접두(또는 그 반대)면 중복으로 보고 A 만 표시.
+export function prettyPluginId(raw: string): string {
+  if (!raw) return "기타";
+  const i = raw.indexOf("_");
+  if (i > 0) {
+    const a = raw.slice(0, i);
+    const b = raw.slice(i + 1);
+    if (b.length > 0 && (a.startsWith(b) || b.startsWith(a))) return a;
+  }
+  return raw;
+}
+
 /// 도구명 표시 정규화.
 ///   mcp__atlassian__jira_search → "jira_search · atlassian"
 ///   Read / Bash 등 네이티브 → 그대로

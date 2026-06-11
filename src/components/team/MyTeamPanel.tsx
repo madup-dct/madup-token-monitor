@@ -9,9 +9,12 @@ import {
   fetchTeamMcp,
   fetchTeamMembersUsage,
   fetchTeamPlugins,
+  fetchTeamTopModels,
 } from "@/lib/teams";
+import type { TeamTopModel } from "@/lib/teams";
 import { formatTokensCompact, formatUSD, formatKRW } from "@/lib/format";
 import { topKValues } from "@/lib/usage-math";
+import { prettyPluginId } from "@/lib/labels";
 import { usePersistentState } from "@/lib/usePersistentState";
 import { Leaderboard } from "@/components/charts/Leaderboard";
 import { PrismCarousel } from "@/components/ui/PrismCarousel";
@@ -126,18 +129,37 @@ export function MyTeamPanel() {
     })),
   });
 
-  // 팀 MCP / 플러그인 TOP (30일 고정 — 모든 면 공통).
-  const mcpQ = useQuery({
-    queryKey: ["team_mcp", selectedTeamId, MCP_PLUGIN_DAYS],
-    queryFn: () => fetchTeamMcp(selectedTeamId!, MCP_PLUGIN_DAYS),
-    enabled: !!selectedTeamId,
-    staleTime: 60_000,
+  // 3 면(오늘/주/월) 사용 모델 TOP5 prefetch — RPC 미적용/에러 시에도 카드가 죽지 않게
+  // retry 없이 빈 배열로 처리 (렌더에서 data ?? []).
+  const topModelsQs = useQueries({
+    queries: LB_RANGES.map((r) => ({
+      queryKey: ["team_top_models", selectedTeamId, rangeToDays(r)],
+      queryFn: async () => {
+        if (!selectedTeamId) return [] as TeamTopModel[];
+        return fetchTeamTopModels(selectedTeamId, rangeToDays(r));
+      },
+      enabled: !!selectedTeamId,
+      staleTime: 60_000,
+      retry: 0,
+    })),
   });
-  const pluginQ = useQuery({
-    queryKey: ["team_plugins", selectedTeamId, MCP_PLUGIN_DAYS],
-    queryFn: () => fetchTeamPlugins(selectedTeamId!, MCP_PLUGIN_DAYS),
-    enabled: !!selectedTeamId,
-    staleTime: 60_000,
+
+  // 팀 MCP / 플러그인 TOP — 면(오늘/주/월)별 prefetch. 캐러셀 전환 시 값이 함께 바뀐다.
+  const mcpQs = useQueries({
+    queries: LB_RANGES.map((r) => ({
+      queryKey: ["team_mcp", selectedTeamId, rangeToDays(r)],
+      queryFn: () => fetchTeamMcp(selectedTeamId!, rangeToDays(r)),
+      enabled: !!selectedTeamId,
+      staleTime: 60_000,
+    })),
+  });
+  const pluginQs = useQueries({
+    queries: LB_RANGES.map((r) => ({
+      queryKey: ["team_plugins", selectedTeamId, rangeToDays(r)],
+      queryFn: () => fetchTeamPlugins(selectedTeamId!, rangeToDays(r)),
+      enabled: !!selectedTeamId,
+      staleTime: 60_000,
+    })),
   });
 
   async function handleRefresh() {
@@ -148,17 +170,13 @@ export function MyTeamPanel() {
         qc.invalidateQueries({ queryKey: ["team_members_usage_lb"] }),
         qc.invalidateQueries({ queryKey: ["team_mcp"] }),
         qc.invalidateQueries({ queryKey: ["team_plugins"] }),
+        qc.invalidateQueries({ queryKey: ["team_top_models"] }),
       ]);
     } finally {
       setRefreshing(false);
     }
   }
 
-  const mcpRows = mcpQ.data ?? [];
-  const pluginRows = pluginQ.data ?? [];
-  const totalMcpCalls = mcpRows.reduce((a, r) => a + r.count, 0);
-  const totalPluginUses = pluginRows.reduce((a, r) => a + r.count, 0);
-  const totalCalls = totalMcpCalls + totalPluginUses;
   const memberCount = teamAgg ? Number(teamAgg.member_count) : 0;
 
   const selectedTeam = teams.find((t) => t.id === selectedTeamId) ?? null;
@@ -197,10 +215,21 @@ export function MyTeamPanel() {
     );
   }
 
-  /// 한 기간의 전체 뷰 — KPI 4 + 멤버 리더보드 + 멤버 토큰 분포 + 팀 MCP/플러그인 TOP.
+  /// 한 기간의 전체 뷰 — KPI 4 + 멤버 리더보드 + 사용 모델 TOP5·토큰 분포 + 팀 MCP/플러그인 TOP.
   function renderFace(r: LBRange, i: number) {
     const { q, rows, totals, activeMembers, stats, days } = faceData(i);
     const label = LB_LABEL[r];
+    const topModelsQ = topModelsQs[i]!;
+    // RPC 미적용/에러 시 빈 배열 → 카드 전체가 죽지 않고 빈 상태 메시지만 표시.
+    const topModels = (topModelsQ.data ?? []) as TeamTopModel[];
+    // MCP/플러그인 — 면별 쿼리 (캐러셀 전환 시 함께 갱신).
+    const mcpQ = mcpQs[i]!;
+    const pluginQ = pluginQs[i]!;
+    const mcpRows = mcpQ.data ?? [];
+    const pluginRows = pluginQ.data ?? [];
+    const totalMcpCalls = mcpRows.reduce((a, r) => a + r.count, 0);
+    const totalPluginUses = pluginRows.reduce((a, r) => a + r.count, 0);
+    const totalCalls = totalMcpCalls + totalPluginUses;
     return (
       <div className="grid grid-cols-12 gap-4 pr-1 pb-1">
         {/* ROW 1: 4 hero KPIs */}
@@ -256,7 +285,7 @@ export function MyTeamPanel() {
           rightAccessory={<DotGrid count={activeMembers} max={16} />}
         />
         <KpiHero
-          eyebrow="MCP · 플러그인 호출 · 30일"
+          eyebrow={`MCP · 플러그인 호출 · ${label}`}
           value={totalCalls.toLocaleString("ko-KR")}
           suffix="건"
           color="violet"
@@ -278,7 +307,7 @@ export function MyTeamPanel() {
           }
         />
 
-        {/* ROW 2: 멤버 리더보드 (col-8) + 멤버 토큰 분포 (col-4) */}
+        {/* ROW 2: 멤버 리더보드 (col-8) + 사용 모델 TOP5 · 멤버 토큰 분포 (col-4) */}
         <section className="mc-card col-span-8">
           <header className="flex items-center justify-between mb-3 gap-3">
             <div className="flex items-center gap-2 min-w-0">
@@ -311,12 +340,29 @@ export function MyTeamPanel() {
         <section className="mc-card col-span-4">
           <header className="flex items-center justify-between mb-3 gap-3 relative">
             <span className="text-[15px] font-semibold text-text-primary tracking-[-0.005em]">
-              팀 멤버 토큰 분포
+              사용 모델 TOP5
             </span>
-            <span className="text-[11px] text-text-tertiary">{label}</span>
+            <span className="text-[11px] text-text-tertiary">토큰 기준 · {label}</span>
           </header>
+          {topModelsQ.error ? (
+            // 형제 카드(MCP/플러그인)와 동일 — RPC 에러가 '기록 없음' 빈 상태로 위장되지 않게.
+            <div className="text-[12px] text-coral mb-2 px-1">
+              RPC 실패: {String((topModelsQ.error as Error).message)}
+            </div>
+          ) : null}
+          <RankBarList
+            items={topModels.map((m) => ({
+              label: m.model.replace("claude-", ""),
+              value: m.totalTokens,
+            }))}
+            formatValue={(v) => formatTokensCompact(v)}
+            maxRows={5}
+            emptyMessage={
+              topModelsQ.isLoading ? "로딩 중…" : `팀 모델 사용 기록 없음 (${label})`
+            }
+          />
           <div
-            className="rounded-[10px] border border-hairline p-3.5"
+            className="mt-4 rounded-[10px] border border-hairline p-3.5"
             style={{ background: "var(--color-surface-2)" }}
           >
             <div className="text-[10.5px] font-bold tracking-[0.14em] uppercase text-text-tertiary mb-2">
@@ -357,12 +403,12 @@ export function MyTeamPanel() {
           </div>
         </section>
 
-        {/* ROW 3: 팀 MCP TOP (col-6) + 팀 플러그인 TOP (col-6) — 30일 고정 */}
+        {/* ROW 3: 팀 MCP TOP (col-6) + 팀 플러그인 TOP (col-6) — 면별 기간 연동 */}
         <section className="mc-card col-span-6">
           <header className="flex items-center justify-between mb-3.5 gap-3 relative">
             <div className="flex items-center gap-2">
               <span className="text-[15px] font-semibold text-text-primary tracking-[-0.005em]">팀 MCP TOP</span>
-              <span className="text-[11.5px] text-text-tertiary whitespace-nowrap">호출 횟수 · 30일</span>
+              <span className="text-[11.5px] text-text-tertiary whitespace-nowrap">호출 횟수 · {label}</span>
             </div>
           </header>
           {mcpQ.error ? (
@@ -371,7 +417,7 @@ export function MyTeamPanel() {
           <RankBarList
             items={mcpRows.map((m) => ({ label: m.label, value: m.count }))}
             formatValue={(v) => v.toLocaleString("ko-KR")}
-            emptyMessage={mcpQ.isLoading ? "로딩 중…" : "팀 MCP 호출 기록 없음 (30일)"}
+            emptyMessage={mcpQ.isLoading ? "로딩 중…" : `팀 MCP 호출 기록 없음 (${label})`}
           />
           <div className="flex justify-between items-center mt-4 pt-3 border-t border-hairline text-[11px] text-text-tertiary">
             <span>
@@ -379,7 +425,7 @@ export function MyTeamPanel() {
               <strong className="num text-text-secondary font-semibold">
                 {totalMcpCalls.toLocaleString("ko-KR")}
               </strong>{" "}
-              호출 / 30일
+              호출 / {label}
             </span>
           </div>
         </section>
@@ -388,16 +434,20 @@ export function MyTeamPanel() {
           <header className="flex items-center justify-between mb-3.5 gap-3 relative">
             <div className="flex items-center gap-2">
               <span className="text-[15px] font-semibold text-text-primary tracking-[-0.005em]">팀 플러그인 TOP</span>
-              <span className="text-[11.5px] text-text-tertiary whitespace-nowrap">활성 사용자 수 · 30일</span>
+              <span className="text-[11.5px] text-text-tertiary whitespace-nowrap">활성 사용자 수 · {label}</span>
             </div>
           </header>
           {pluginQ.error ? (
             <div className="text-[12px] text-coral mb-2 px-1">RPC 실패: {String(pluginQ.error.message)}</div>
           ) : null}
           <RankBarList
-            items={pluginRows.map((p) => ({ label: p.label, value: p.count }))}
+            items={pluginRows.map((p) => ({
+              label: prettyPluginId(p.label),
+              title: p.label,
+              value: p.count,
+            }))}
             formatValue={(v) => v.toLocaleString("ko-KR")}
-            emptyMessage={pluginQ.isLoading ? "로딩 중…" : "팀 플러그인 사용 기록 없음 (30일)"}
+            emptyMessage={pluginQ.isLoading ? "로딩 중…" : `팀 플러그인 사용 기록 없음 (${label})`}
           />
           <div className="flex justify-between items-center mt-4 pt-3 border-t border-hairline text-[11px] text-text-tertiary">
             <span>
@@ -405,7 +455,7 @@ export function MyTeamPanel() {
               <strong className="num text-text-secondary font-semibold">
                 {totalPluginUses.toLocaleString("ko-KR")}
               </strong>{" "}
-              사용 / 30일
+              사용 / {label}
             </span>
           </div>
         </section>

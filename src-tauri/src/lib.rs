@@ -56,7 +56,7 @@ fn restart_app(app: tauri::AppHandle) {
 // invoke_handler에 해당 커맨드 추가 필요
 // ============================================================
 
-use aggregator::sync_aggregates_now;
+use aggregator::{clear_supabase_session, set_supabase_session, sync_aggregates_now};
 use commands::{
     clear_cache_dir, delete_all_data, get_heatmap, get_settings, get_summary, get_timeseries,
     get_today_cost_usd, get_top_mcp, get_top_plugins, get_top_tools, set_setting,
@@ -103,6 +103,8 @@ pub fn run() {
             show_main_window,
             restart_app,
             sync_aggregates_now,
+            set_supabase_session,
+            clear_supabase_session,
             get_oauth_usage,
             refresh_oauth_usage,
             get_settings,

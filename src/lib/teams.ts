@@ -118,6 +118,34 @@ export async function fetchTeamPlugins(teamId: string, rangeDays = 30): Promise<
   }));
 }
 
+export interface TeamTopModel {
+  model: string;
+  totalTokens: number;
+  totalCost: number;
+}
+
+/// 팀 멤버 합산 사용 모델별 토큰 TOP. RLS 가 가시 범위 강제 (팀메이트/manager+).
+/// days=0 이면 KST 오늘 00시부터 (RPC 가 KST 달력 경계로 계산).
+export async function fetchTeamTopModels(
+  teamId: string,
+  days: number,
+  limit = 5
+): Promise<TeamTopModel[]> {
+  const { data, error } = await supabase.rpc("get_team_top_models", {
+    p_team_id: teamId,
+    p_days: days,
+    p_limit: limit,
+  });
+  if (error) throw error;
+  return (
+    (data ?? []) as { model: string; total_tokens: number; total_cost: number }[]
+  ).map((r) => ({
+    model: r.model,
+    totalTokens: Number(r.total_tokens),
+    totalCost: Number(r.total_cost),
+  }));
+}
+
 /// 팀 생성. 트리거가 호출자를 owner 로 자동 등록.
 export async function createTeam(name: string, slug: string): Promise<Team> {
   const { data: sess } = await supabase.auth.getSession();

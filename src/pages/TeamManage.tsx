@@ -23,7 +23,17 @@ export default function TeamManage() {
   }
 
   return (
-    <div className="px-7 pt-5 pb-8 flex flex-col gap-6">
+    <div className="px-7 pt-6 pb-8 flex flex-col gap-6">
+      {/* Content head — 다른 페이지(내 팀/사내 대시보드)와 동일한 제목+서브타이틀 패턴.
+          드릴다운 상세는 TeamManageList 가 자체 헤더를 가져 중복 표시하지 않는다. */}
+      {!drilled && (
+        <div className="min-w-0">
+          <h1 className="text-[22px] font-bold tracking-[-0.01em] text-text-primary">팀 관리</h1>
+          <p className="text-[12px] text-text-tertiary mt-1">
+            팀별 비교 · 유저 디렉토리 · 팀 멤버 관리 (팀 리더 이상)
+          </p>
+        </div>
+      )}
       {drilled ? (
         <TeamManageList />
       ) : (

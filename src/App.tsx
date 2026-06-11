@@ -16,7 +16,7 @@ import Settings from "@/pages/Settings";
 import Login from "@/pages/Login";
 import UserDashboard from "@/pages/UserDashboard";
 import { AuthGuard } from "@/lib/AuthGuard";
-import { handleAuthCallback, syncAggregatesNow } from "@/lib/auth";
+import { clearSessionInRust, handleAuthCallback, pushSessionToRust, syncAggregatesNow } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TitleBar } from "@/components/layout/TitleBar";
@@ -61,7 +61,7 @@ function Layout() {
 }
 
 const SYNC_INTERVAL_MS = 5 * 60 * 1000; // 주기 sync (기존 1h → 단축). 변경 즉시 반영은 usage-updated 이벤트가 담당.
-const EVENT_SYNC_THROTTLE_MS = 15_000; // usage-updated 이벤트 기반 sync 최소 간격 (Supabase 부하 가드).
+const EVENT_SYNC_THROTTLE_MS = 60_000; // 증분 sync 로 페이로드는 작지만 요청 빈도 자체를 낮춤. 트레이 실시간성은 로컬 경로 담당.
 
 /// 로그인 시 주기 + 변경 이벤트 기반 사내 집계 sync. 모니터링 목적이라 opt-in 없이 항상 공유.
 /// watcher 가 새 사용량을 SQLite 에 쓰면 'usage-updated' 이벤트를 emit → 여기서 throttle 후
@@ -78,7 +78,9 @@ function AggregateSyncDriver() {
 
     function invalidateMine() {
       // 본인 사용량 파생 쿼리 — 동기화 후 즉시 refetch.
-      for (const key of ["summary", "timeseries", "heatmap", "my_device_count"]) {
+      // my_hourly: 캐러셀 자동회전으로 상시 fetch 되면서 mount 후 갱신 트리거가
+      // 이것뿐이라 누락 시 시간별 면이 오래된 차트로 고정된다.
+      for (const key of ["summary", "timeseries", "heatmap", "my_device_count", "my_hourly"]) {
         qc.invalidateQueries({ queryKey: [key] });
       }
     }
@@ -138,6 +140,25 @@ function AggregateSyncDriver() {
       unlisten?.();
     };
   }, [qc]);
+  return null;
+}
+
+/// Rust 트레이가 타기기 오늘 비용을 Supabase 에서 조회할 수 있도록 세션(JWT)을
+/// Rust 메모리 캐시로 전달. Rust 는 세션을 영속하지 않으므로 앱 시작 1회 +
+/// SIGNED_IN/TOKEN_REFRESHED(자동 갱신은 JS 에서만 발생)마다 다시 밀어넣는다.
+function SupabaseSessionBridge() {
+  useEffect(() => {
+    void pushSessionToRust();
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+        void pushSessionToRust(session);
+      } else if (event === "SIGNED_OUT") {
+        // 이전 사용자 JWT/비용이 Rust 메모리·트레이에 잔류하지 않게 즉시 제거.
+        void clearSessionInRust();
+      }
+    });
+    return () => data.subscription.unsubscribe();
+  }, []);
   return null;
 }
 
@@ -245,6 +266,7 @@ export default function App() {
         <KeyboardShortcuts />
         <ShowWindowOnReady />
         <DeepLinkBridge />
+        <SupabaseSessionBridge />
         <AggregateSyncDriver />
         <Routes>
           <Route path="/login" element={<Login />} />

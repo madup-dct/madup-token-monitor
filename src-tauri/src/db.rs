@@ -13,8 +13,22 @@ pub fn open() -> Result<Connection> {
         std::fs::create_dir_all(parent).ok();
     }
     let conn = Connection::open(&path)?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
-    migrate(&conn)?;
+    // busy_timeout — watcher INSERT burst 와 sync/트레이 폴링의 동시 open 에서
+    // SQLITE_BUSY 즉시 실패 대신 대기. 증분 sync 의 워터마크 트랜잭션 보호.
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
+    )?;
+    // migrate 는 프로세스당 1회 — DDL/일회성 청소/recalc 가 매 open 마다 풀스캔 도는
+    // 비용 제거 (sync 1회당 open 6회 실측). 단가표·플러그인 레지스트리는 앱 시작 시점
+    // 고정(OnceLock)이라 런타임 재실행의 의미도 없다.
+    static MIGRATED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+    {
+        let mut done = MIGRATED.lock().unwrap_or_else(|e| e.into_inner());
+        if !*done {
+            migrate(&conn)?;
+            *done = true;
+        }
+    }
     Ok(conn)
 }
 
@@ -53,7 +67,9 @@ fn migrate(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_tool_ts ON tool_calls(ts);
         CREATE UNIQUE INDEX IF NOT EXISTS uniq_tool_call
-            ON tool_calls(source, ts, tool_name);",
+            ON tool_calls(source, ts, tool_name);
+
+        CREATE TABLE IF NOT EXISTS sync_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
 
     // 기존 DB의 누락된 컬럼 추가 (idempotent)
@@ -73,42 +89,125 @@ fn migrate(conn: &Connection) -> Result<()> {
     // 형식만 plugin_id로 인정. 옛 row 정리:
     //   1) plugin_id == mcp_server 인 row → plugin_id NULL (대부분 일반 MCP 서버였음)
     //   2) mcp_server 가 plugin_<name>_t 형식이면 <name> 만 추출해서 plugin_id에 재기입
-    let _ = conn.execute(
-        "UPDATE tool_calls SET plugin_id = NULL
+    // 재분류 row 수를 누적 — 0건이 아니면 tool 워터마크를 리셋해 증분 sync 가
+    // in-place 변경(id 불변이라 dirty 로 안 잡힘)을 Supabase 에 반영하게 한다.
+    let mut reclassified = 0usize;
+    reclassified += conn
+        .execute(
+            "UPDATE tool_calls SET plugin_id = NULL
          WHERE plugin_id IS NOT NULL AND plugin_id = mcp_server",
-        [],
-    );
+            [],
+        )
+        .unwrap_or(0);
     // SQLite SUBSTR(s, start, length) — 1-indexed. 'plugin_'(7) 다음 시작, 끝 '_t'(2) 제거.
-    let _ = conn.execute(
-        "UPDATE tool_calls
+    reclassified += conn
+        .execute(
+            "UPDATE tool_calls
          SET plugin_id = SUBSTR(mcp_server, 8, LENGTH(mcp_server) - 9)
          WHERE mcp_server LIKE 'plugin_%_t'
            AND LENGTH(mcp_server) > 9",
-        [],
-    );
+            [],
+        )
+        .unwrap_or(0);
     // Claude Code 플러그인은 MCP TOP에 보이지 않게 mcp_server NULL로 정리.
-    let _ = conn.execute(
-        "UPDATE tool_calls
+    reclassified += conn
+        .execute(
+            "UPDATE tool_calls
          SET mcp_server = NULL
          WHERE mcp_server LIKE 'plugin_%_t'",
-        [],
-    );
+            [],
+        )
+        .unwrap_or(0);
     // 플러그인 레지스트리(~/.claude/plugins/cache 폴더명) 기준으로 옛 분류 보정 —
     // 설치된 플러그인 ID와 일치하는 mcp_server 는 plugin_id 로 이동.
     for plugin_id in crate::plugins::known_plugin_ids() {
-        let _ = conn.execute(
-            "UPDATE tool_calls
+        reclassified += conn
+            .execute(
+                "UPDATE tool_calls
              SET plugin_id = ?1, mcp_server = NULL
              WHERE mcp_server = ?1",
-            params![plugin_id],
+                params![plugin_id],
+            )
+            .unwrap_or(0);
+    }
+    if reclassified > 0 {
+        // recalc 와 같은 패턴: 워터마크 삭제 + 세대 증가 (sync 도중이면 전진 포기 유도).
+        let _ = conn.execute(
+            "DELETE FROM sync_state WHERE key = ?1",
+            params![SYNC_WM_TOOL],
+        );
+        let _ = conn.execute(
+            "INSERT INTO sync_state (key, value) VALUES (?1, '1')
+             ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1",
+            params![SYNC_RECALC_GEN],
         );
     }
 
     // ── cost=0 이벤트 재계산 ────────────────────────────────────────────────
     // 단가표에 없던 신규 모델(예: claude-fable-5)이 cost_usd=0 으로 적재된 이벤트를
     // 현재 단가표로 보정. 단가가 여전히 없는 모델(<synthetic> 등)은 0 유지라 idempotent.
-    let _ = recalc_zero_cost_events(conn);
+    //
+    // 보정(UPDATE) + 워터마크 삭제 + 세대 증가를 한 트랜잭션으로 묶는다 —
+    // "보정은 됐는데 재업로드 강제는 누락" 되는 부분 실패를 차단하고,
+    // 실패 시 전체 롤백돼 다음 open 의 recalc 가 처음부터 재시도한다 (자가복구).
+    if let Ok(tx) = conn.unchecked_transaction() {
+        match recalc_zero_cost_events(&tx) {
+            Ok(fixed) if fixed > 0 => {
+                // cost 소급 보정은 기존 usage_events row(id ≤ 워터마크)를 바꾸므로
+                // usage 워터마크만 삭제해 1회 전체 재업로드를 강제한다
+                // (tool_calls 집계는 cost 와 무관 — TOOL 워터마크는 유지).
+                // 세대 카운터는 "sync 진행 중에 보정이 끼어든" 경우 sync 종료부가
+                // 워터마크 전진을 포기하게 하는 신호 (aggregator 참조).
+                let reset = tx
+                    .execute("DELETE FROM sync_state WHERE key = ?1", params![SYNC_WM_USAGE])
+                    .and_then(|_| {
+                        tx.execute(
+                            "INSERT INTO sync_state (key, value) VALUES (?1, '1')
+                             ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1",
+                            params![SYNC_RECALC_GEN],
+                        )
+                    });
+                match reset {
+                    Ok(_) => {
+                        let _ = tx.commit();
+                    }
+                    Err(e) => eprintln!("[recalc] watermark reset failed (rolled back): {e}"),
+                }
+            }
+            Ok(_) => {
+                let _ = tx.commit();
+            }
+            Err(e) => eprintln!("[recalc] failed: {e}"),
+        }
+    }
 
+    Ok(())
+}
+
+/// 증분 sync 워터마크 키 — aggregator 가 마지막 업로드 시점의 MAX(id) 를 기록.
+pub const SYNC_WM_USAGE: &str = "last_synced_usage_event_id";
+pub const SYNC_WM_TOOL: &str = "last_synced_tool_call_id";
+/// 마지막으로 업로드한 user_id — 계정 전환 시 워터마크를 무시하고 새 계정 명의로
+/// 전체 백필하기 위한 바인딩.
+pub const SYNC_LAST_USER: &str = "last_synced_user_id";
+/// cost 소급 보정 세대 — recalc 가 row 를 고칠 때마다 +1. sync 는 시작/종료 세대가
+/// 다르면 워터마크를 전진시키지 않아, 보정 직후의 전체 재업로드 강제가 덮어써지지 않는다.
+pub const SYNC_RECALC_GEN: &str = "recalc_generation";
+
+pub fn get_sync_state(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT value FROM sync_state WHERE key = ?1",
+        params![key],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+pub fn set_sync_state(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?1, ?2)",
+        params![key, value],
+    )?;
     Ok(())
 }
 
@@ -251,5 +350,53 @@ mod tests {
             .query_row("SELECT cost_usd FROM usage_events WHERE ts = 2", [], |r| r.get(0))
             .unwrap();
         assert_eq!(synthetic, 0.0, "단가 없는 모델은 0 유지");
+    }
+
+    #[test]
+    fn test_sync_state_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        assert_eq!(get_sync_state(&conn, SYNC_WM_USAGE), None, "미설정 키는 None");
+        set_sync_state(&conn, SYNC_WM_USAGE, "42").unwrap();
+        assert_eq!(get_sync_state(&conn, SYNC_WM_USAGE).as_deref(), Some("42"));
+        // INSERT OR REPLACE — 같은 키 재기록 시 덮어쓰기.
+        set_sync_state(&conn, SYNC_WM_USAGE, "100").unwrap();
+        assert_eq!(get_sync_state(&conn, SYNC_WM_USAGE).as_deref(), Some("100"));
+    }
+
+    // 회귀: cost 소급 보정(fixed>0)이 일어나면 usage 워터마크 삭제 + 세대 증가로
+    // 다음 sync 가 전체 재업로드(백필)로 동작해야 한다. tool 워터마크는 cost 와 무관해 유지.
+    #[test]
+    fn test_recalc_resets_sync_watermarks() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        set_sync_state(&conn, SYNC_WM_USAGE, "100").unwrap();
+        set_sync_state(&conn, SYNC_WM_TOOL, "50").unwrap();
+
+        // 보정 대상 없음(fixed=0) → 워터마크/세대 유지.
+        migrate(&conn).unwrap();
+        assert_eq!(get_sync_state(&conn, SYNC_WM_USAGE).as_deref(), Some("100"));
+        assert_eq!(get_sync_state(&conn, SYNC_RECALC_GEN), None);
+
+        // 단가표 매칭으로 보정될 cost=0 이벤트 추가 → migrate 의 recalc 가 fixed>0.
+        conn.execute_batch(
+            "INSERT INTO usage_events (source, model, ts, input_tokens, cost_usd)
+             VALUES ('claude', 'claude-fable-5', 1, 1000000, 0.0);",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(get_sync_state(&conn, SYNC_WM_USAGE), None);
+        assert_eq!(get_sync_state(&conn, SYNC_WM_TOOL).as_deref(), Some("50"));
+        assert_eq!(get_sync_state(&conn, SYNC_RECALC_GEN).as_deref(), Some("1"));
+
+        // 두 번째 보정 → 세대 2 (카운터 증가 확인).
+        conn.execute_batch(
+            "INSERT INTO usage_events (source, model, ts, input_tokens, cost_usd)
+             VALUES ('claude', 'claude-fable-5', 2, 1000000, 0.0);",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(get_sync_state(&conn, SYNC_RECALC_GEN).as_deref(), Some("2"));
     }
 }

@@ -240,7 +240,9 @@ export default function Settings() {
     setSyncError(null);
     setSyncResult(null);
     try {
-      const result = await syncAggregatesNow();
+      // 수동 동기화는 전체 백필(force) — 증분 sync 가 복구하지 못하는 원격 드리프트의
+      // 유일한 사용자 측 복구 수단. 빈도가 낮아 부하 영향 없음.
+      const result = await syncAggregatesNow(true);
       if (result) {
         setSyncResult(result);
         const now = new Date();
@@ -331,6 +333,14 @@ export default function Settings() {
     lastSync ? formatRelative(Date.now() - lastSync.getTime()) : null;
 
   // ───────────────────────────────────────────────────────────────────────────
+  // 섹션 번호 — 04~07 은 권한별 조건부 섹션이 섞여 있어 "표시되는 순서대로" 동적 부여.
+  // 정적 번호는 비표시 섹션에서 번호가 건너뛰거나(일반 사용자) 중복돼 보인다.
+  let secNo = 3;
+  const numTeam = isTeamLeader ? String(++secNo).padStart(2, "0") : "";
+  const numRole = isManager ? String(++secNo).padStart(2, "0") : "";
+  const numInfo = String(++secNo).padStart(2, "0");
+  const numDanger = String(++secNo).padStart(2, "0");
+
   // Render
   // ───────────────────────────────────────────────────────────────────────────
   return (
@@ -428,7 +438,7 @@ export default function Settings() {
                     사내 집계 즉시 동기화
                   </div>
                   <div className="text-[12px] text-text-tertiary leading-relaxed">
-                    앱 시작 후 5초, 그 다음 1시간마다 자동 동기화됩니다.
+                    앱 시작 후 5초, 이후 5분 주기 + 사용량 변경 시 자동 동기화됩니다 (변경분만 업로드).
                     {lastSync && (
                       <>
                         {" "}
@@ -461,13 +471,24 @@ export default function Settings() {
                   {syncing ? "동기화 중…" : "지금 동기화"}
                 </button>
               </div>
-              {syncResult && (
-                <p className="text-[11.5px] text-lime mt-2">
-                  ✓ 동기화 완료 — 사용량 {syncResult.usage_rows}건 / MCP{" "}
-                  {syncResult.mcp_rows}건 / 플러그인 {syncResult.plugin_rows}건 / 시간별{" "}
-                  {syncResult.hourly_rows}건
-                </p>
-              )}
+              {syncResult &&
+                (syncResult.usage_rows +
+                  syncResult.mcp_rows +
+                  syncResult.plugin_rows +
+                  syncResult.hourly_rows +
+                  syncResult.tool_rows ===
+                0 ? (
+                  // 증분 sync — 변경분이 없으면 업로드 0건이 정상.
+                  <p className="text-[11.5px] text-lime mt-2">
+                    ✓ 변경분 없음 — 이미 최신 상태입니다
+                  </p>
+                ) : (
+                  <p className="text-[11.5px] text-lime mt-2">
+                    ✓ 동기화 완료 — 사용량 {syncResult.usage_rows}건 / MCP{" "}
+                    {syncResult.mcp_rows}건 / 플러그인 {syncResult.plugin_rows}건 / 시간별{" "}
+                    {syncResult.hourly_rows}건 / 도구 {syncResult.tool_rows}건
+                  </p>
+                ))}
               {syncError && (
                 <p className="text-[11.5px] text-coral mt-2 break-all">
                   동기화 실패: {syncError}
@@ -539,22 +560,22 @@ export default function Settings() {
           </div>
         </Card>
 
-        {/* ============ 05 · 팀 관리 (team_leader+) ============ */}
+        {/* ============ 팀 관리 (team_leader+) ============ */}
         {isTeamLeader ? (
-          <Card num="05" eyebrow="팀" title="내 팀 관리">
+          <Card num={numTeam} eyebrow="팀" title="내 팀 관리">
             <TeamManagePanel />
           </Card>
         ) : null}
 
-        {/* ============ 06 · 역할 관리 (manager+) ============ */}
+        {/* ============ 역할 관리 (manager+) ============ */}
         {isManager ? (
-          <Card num="06" eyebrow="권한" title="사내 역할 부여">
+          <Card num={numRole} eyebrow="권한" title="사내 역할 부여">
             <RoleManagementSection />
           </Card>
         ) : null}
 
-        {/* ============ 04 · 앱 정보 ============ */}
-        <Card num="04" eyebrow="앱 정보" title="버전 · 도움말">
+        {/* ============ 앱 정보 ============ */}
+        <Card num={numInfo} eyebrow="앱 정보" title="버전 · 도움말">
           <div className="flex flex-col">
             <InfoRow
               label="현재 버전"
@@ -761,7 +782,7 @@ export default function Settings() {
 
         {/* ============ 05 · 위험 구역 ============ */}
         <Card
-          num="05"
+          num={numDanger}
           eyebrow="위험 구역"
           title="데이터 / 캐시 초기화"
           danger

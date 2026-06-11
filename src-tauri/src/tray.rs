@@ -65,7 +65,10 @@ pub fn setup_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
 /// `show_menubar_cost` 설정이 false 면 메뉴바 텍스트는 비워둔다.
 /// 폴링(spawn_title_updater) 과 토글 변경 직후(set_setting) 양쪽에서 호출된다.
 pub fn refresh_tray_title<R: Runtime>(app: &AppHandle<R>) {
-    let cost = crate::commands::today_cost_usd();
+    // 다기기 합산: 로컬(이 기기, SQLite 최신) + 타기기 캐시(없으면 0).
+    // 여기서는 캐시 읽기만 — 네트워크 fetch 는 폴링 스레드(spawn_title_updater)가 담당하므로
+    // watcher 파싱 직후 즉시 호출돼도 블로킹되지 않는다.
+    let cost = crate::commands::today_cost_usd() + crate::aggregator::cached_other_devices_cost();
     let show_text = crate::commands::read_show_menubar_cost();
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         #[cfg(target_os = "macos")]
@@ -93,6 +96,8 @@ pub fn refresh_tray_title<R: Runtime>(app: &AppHandle<R>) {
 /// 실시간 갱신은 watcher 가 파싱 직후 refresh_tray_title 을 직접 호출한다.
 pub fn spawn_title_updater<R: Runtime>(app: AppHandle<R>) {
     std::thread::spawn(move || loop {
+        // 타기기 오늘 비용 — stale(120초)일 때만 Supabase fetch. blocking 은 이 전용 스레드에서만.
+        crate::aggregator::refresh_other_devices_cost_if_stale();
         refresh_tray_title(&app);
         std::thread::sleep(std::time::Duration::from_secs(30));
     });

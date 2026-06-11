@@ -33,9 +33,10 @@ export function CrossTeamPanel() {
         (acc, t) => {
           acc.tokens += Number(t.total_tokens);
           acc.cost += Number(t.total_cost);
+          acc.members += Number(t.member_count);
           return acc;
         },
-        { tokens: 0, cost: 0 },
+        { tokens: 0, cost: 0, members: 0 },
       ),
     [teams],
   );
@@ -66,18 +67,36 @@ export function CrossTeamPanel() {
     <div className="flex flex-col gap-4">
       {/* KPI 요약 */}
       <div className="grid grid-cols-12 gap-4">
-        <KpiHero eyebrow="팀 수" value={String(teams.length)} color="violet" colSpan={4} />
+        <KpiHero
+          eyebrow="팀 수"
+          value={String(teams.length)}
+          suffix="팀"
+          color="violet"
+          colSpan={4}
+          context={`${totals.members}명 소속`}
+        />
         <KpiHero
           eyebrow="전체 토큰 · 30일"
           value={formatTokensCompact(totals.tokens)}
+          suffix="tokens"
           color="azure"
           colSpan={4}
+          context={
+            teams.length > 0
+              ? `팀 평균 ${formatTokensCompact(totals.tokens / teams.length)}`
+              : undefined
+          }
         />
         <KpiHero
           eyebrow="전체 비용 · 30일"
           value={formatUSD(totals.cost)}
           color="amber"
           colSpan={4}
+          context={
+            teams.length > 0
+              ? `팀 평균 ${formatUSD(totals.cost / teams.length)}`
+              : undefined
+          }
         />
       </div>
 

@@ -129,7 +129,8 @@ export function DailyBarChart({
               {h > 18 && (
                 <text
                   x={x + barW / 2}
-                  y={y - 6}
+                  // 평균 점선과 세로로 겹치면 선 위로 피신 — 라벨이 점선에 얹혀 읽기 어려운 것 방지.
+                  y={avgValue > 0 && Math.abs(y - 6 - avgY) < 11 ? Math.min(y - 6, avgY - 11) : y - 6}
                   textAnchor="middle"
                   fontSize="10"
                   fontFamily="JetBrains Mono, monospace"
@@ -194,17 +195,35 @@ export function DailyBarChart({
             strokeDasharray="4 4"
             opacity={0.7}
           />
-          <text
-            x={CHART_W - 4}
-            y={avgY - 5}
-            textAnchor="end"
-            fontSize="9.5"
-            fill="#F5B544"
-            fontFamily="Pretendard, sans-serif"
-            fontWeight={500}
-          >
-            평균 · {fmt(avgValue)}
-          </text>
+          {/* 라벨 뒤 어두운 백드롭 — 마지막 막대 값 라벨과 겹쳐도 판독 가능하게 */}
+          {(() => {
+            const label = `평균 · ${fmt(avgValue)}`;
+            const w = 8 + label.length * 7;
+            return (
+              <>
+                <rect
+                  x={CHART_W - 4 - w}
+                  y={avgY - 14.5}
+                  width={w}
+                  height={13}
+                  rx={6.5}
+                  fill="#0B1020"
+                  opacity={0.85}
+                />
+                <text
+                  x={CHART_W - 8}
+                  y={avgY - 5}
+                  textAnchor="end"
+                  fontSize="9.5"
+                  fill="#F5B544"
+                  fontFamily="Pretendard, sans-serif"
+                  fontWeight={500}
+                >
+                  {label}
+                </text>
+              </>
+            );
+          })()}
         </g>
       )}
     </svg>

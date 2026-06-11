@@ -43,7 +43,7 @@ madup_token_monitoring/
 │   ├── SUPABASE_SETUP.md
 │   └── GITHUB_SECRETS.md
 ├── src/                    # 프론트엔드
-│   ├── App.tsx             # BrowserRouter + DeepLinkBridge + AggregateSyncDriver + Layout
+│   ├── App.tsx             # BrowserRouter + DeepLinkBridge + AggregateSyncDriver + SupabaseSessionBridge + Layout
 │   ├── pages/              # Dashboard, MCP, Plugins, Leaderboard, Chat, Settings, Login, Profile
 │   ├── components/
 │   │   ├── ui/             # 디자인시스템 1차 (Select, card, tabs)
@@ -213,7 +213,7 @@ git push origin v0.1.x
 parser.rs → usage_events table (SQLite)
   ↓ get_summary / get_timeseries / get_top_mcp / get_top_plugins (commands.rs)
 React (useUsage.ts) → Dashboard / MCP / Plugins
-  ↓ (옵트인 + 1시간 주기 또는 수동 sync)
+  ↓ (5분 주기 + 사용량 변경 이벤트(60초 throttle) + 수동 sync)
 aggregator.rs → Supabase usage_aggregates / mcp_aggregates / plugin_aggregates
   ↓ Supabase RPC (get_top_users, get_top_mcp, get_top_plugins, get_weekly_top10)
 Leaderboard / Plugins (사내 집계 view)
@@ -221,6 +221,12 @@ Leaderboard / Plugins (사내 집계 view)
 
 `usage_events` 의 `(message_id, request_id)` UNIQUE INDEX 로 dedup.
 `get_today_cost_usd` 는 트레이 메뉴바 옆 텍스트 갱신용.
+`sync_aggregates_now` 는 증분 업로드 — `sync_state` 의 MAX(id) 워터마크로 변경분이 건드린
+dirty 버킷만 upsert, 변경 없으면 네트워크 생략. cost 소급 보정(recalc)·tool 재분류 시 워터마크
+리셋 → 전체 재업로드. 계정 전환 시(SYNC_LAST_USER 불일치)도 전체 백필. Settings 수동 동기화는
+force=전체 백필 (원격 드리프트 복구 수단).
+⚠️ usage_events/tool_calls 를 **삭제**하는 기능을 추가하면 `sync_state` 도 같이 비울 것 —
+rowid 재사용으로 워터마크가 신규 이벤트를 영구 누락시킨다 (id 는 AUTOINCREMENT 아님).
 
 ## 8. 코드 컨벤션
 
@@ -257,6 +263,12 @@ Leaderboard / Plugins (사내 집계 view)
   | 활성 카운트 dot grid (KPI rightAccessory) | `@/components/ui/DotGrid` | CompanyDashboard, MyTeamPanel |
   | 기간 캐러셀 컨트롤 (이전/점/다음 + 자동 토글) | `@/components/ui/CarouselControls` | CompanyDashboard, MyTeamPanel (전체 슬라이드 헤더) |
   | Dropdown (single-select) | `@/components/ui/Select` | **모든 페이지** — native `<select>` 금지 |
+
+  - **granularity(시간별/일자별/주별/월별) 컨트롤 컨벤션** — ambient 대시보드 카드는
+    `CarouselControls`(자동 회전 포함), 분석 페이지(AdminAnalytics)는 `Segmented`(직접 선택).
+    의도적 구분 — 통일 재제안 금지.
+  - **플러그인 ID 표시는 `prettyPluginId`(lib/labels.ts) 경유** — Claude Code 가 절단한
+    중복 ID("playwright_playwrig")를 정리. RankBarList 에는 `title`(원본) 함께 전달.
 
   - 다른 페이지에서 비슷한 컴포넌트가 필요하면 → **공유 컴포넌트의 prop 슬롯/variant 를 확장**.
   - 한 페이지에서만 의미 있는 UI 라도, **두 번째 페이지에서 비슷하게 필요해지는 순간 추출**.

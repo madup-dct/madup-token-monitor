@@ -60,7 +60,9 @@ export function PeriodChartCard({
   return (
     <section className={`mc-card ${colSpan === 12 ? "col-span-12" : "col-span-8"}`}>
       <header className="flex items-center justify-between mb-3.5 gap-3 relative flex-wrap">
-        <div className="flex items-center gap-2">{leftHeader}</div>
+        {/* leftHeader 도 wrap — 컨트롤이 많은 페이지(캐러셀+Select)에서 좁은 폭일 때
+            한 줄 과밀로 깨지는 대신 자연스럽게 줄바꿈 */}
+        <div className="flex items-center gap-2 flex-wrap min-w-0">{leftHeader}</div>
         <div className="flex items-center gap-2 shrink-0">
           <Segmented
             value={metric}

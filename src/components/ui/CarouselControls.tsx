@@ -4,8 +4,9 @@ interface CarouselControlsProps {
   onIndexChange: (next: number) => void;
   /// 점(dot)의 aria-label/title 용 라벨 (length === count).
   labels: string[];
-  auto: boolean;
-  onAutoChange: (next: boolean) => void;
+  /// 자동 회전 토글 — 미지정 시 토글 자체를 렌더하지 않음 (수동 전환 전용 캐러셀).
+  auto?: boolean;
+  onAutoChange?: (next: boolean) => void;
 }
 
 /// 기간 캐러셀 컨트롤 — 이전/점/다음 + 자동 회전 토글.
@@ -57,24 +58,28 @@ export function CarouselControls({
           <path d="M6 3l5 5-5 5" />
         </svg>
       </button>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={auto}
-        onClick={() => onAutoChange(!auto)}
-        title="자동 넘기기"
-        className="relative w-[34px] h-[20px] rounded-full transition-colors shrink-0 ml-1"
-        style={{ background: auto ? "var(--color-azure)" : "var(--color-surface-3)" }}
-      >
-        <span
-          className="absolute top-[2px] left-[2px] w-4 h-4 rounded-full transition-transform"
-          style={{
-            background: auto ? "#fff" : "var(--color-text-secondary)",
-            transform: auto ? "translateX(14px)" : "translateX(0)",
-          }}
-        />
-      </button>
-      <span className="text-[11px] text-text-tertiary whitespace-nowrap">자동</span>
+      {auto !== undefined && onAutoChange ? (
+        <>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={auto}
+            onClick={() => onAutoChange(!auto)}
+            title="자동 넘기기"
+            className="relative w-[34px] h-[20px] rounded-full transition-colors shrink-0 ml-1"
+            style={{ background: auto ? "var(--color-azure)" : "var(--color-surface-3)" }}
+          >
+            <span
+              className="absolute top-[2px] left-[2px] w-4 h-4 rounded-full transition-transform"
+              style={{
+                background: auto ? "#fff" : "var(--color-text-secondary)",
+                transform: auto ? "translateX(14px)" : "translateX(0)",
+              }}
+            />
+          </button>
+          <span className="text-[11px] text-text-tertiary whitespace-nowrap">자동</span>
+        </>
+      ) : null}
     </div>
   );
 }

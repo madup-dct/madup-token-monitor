@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { usePersistentState } from "@/lib/usePersistentState";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -10,6 +10,7 @@ import {
   type LeaderboardRange,
 } from "@/hooks/useUsage";
 import { useAuthUser } from "@/hooks/useAuthUser";
+import { prettyPluginId } from "@/lib/labels";
 import { roleAtLeast } from "@/hooks/useRole";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { RingMeter } from "@/components/ui/RingMeter";
@@ -63,10 +64,38 @@ export default function CompanyDashboard() {
     week: lbWeek,
     month: lbMonth,
   };
-  const mcp = useCompanyTopMcp(30);
-  const plugins = useCompanyTopPlugins(30);
-  // 사이드 카드 — 전사 모델 집계 RPC 가 없어 본인 7일 by_model 를 컨텍스트로 표시.
+  // MCP/플러그인 — 면(오늘/주/월)별 prefetch. 캐러셀 전환 시 값이 함께 바뀐다.
+  const mcpToday = useCompanyTopMcp(rangeToDays("today"));
+  const mcpWeek = useCompanyTopMcp(rangeToDays("week"));
+  const mcpMonth = useCompanyTopMcp(rangeToDays("month"));
+  const mcpByRange: Record<LeaderboardRange, typeof mcpToday> = {
+    today: mcpToday,
+    week: mcpWeek,
+    month: mcpMonth,
+  };
+  const plgToday = useCompanyTopPlugins(rangeToDays("today"));
+  const plgWeek = useCompanyTopPlugins(rangeToDays("week"));
+  const plgMonth = useCompanyTopPlugins(rangeToDays("month"));
+  const plgByRange: Record<LeaderboardRange, typeof plgToday> = {
+    today: plgToday,
+    week: plgWeek,
+    month: plgMonth,
+  };
+  // 사이드 카드 — 전사 모델 집계 RPC 가 없어 본인 로컬 by_model 를 컨텍스트로 표시.
+  // 면별 근사 매핑: 오늘→1d(자정부터), 주→최근 7일, 달→최근 30일 (로컬 range 의미 기준).
+  const { data: mySummary1 } = useSummary("1d");
   const { data: mySummary7 } = useSummary("7d");
+  const { data: mySummary30 } = useSummary("30d");
+  const mySummaryByRange: Record<LeaderboardRange, typeof mySummary7> = {
+    today: mySummary1,
+    week: mySummary7,
+    month: mySummary30,
+  };
+  const MY_MODEL_SUFFIX: Record<LeaderboardRange, string> = {
+    today: "오늘",
+    week: "최근 7일",
+    month: "최근 30일",
+  };
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -81,22 +110,20 @@ export default function CompanyDashboard() {
     }
   }
 
-  const mcpRows = mcp.data ?? [];
-  const pluginRows = plugins.data ?? [];
-  const totalMcpCalls = mcpRows.reduce((a, r) => a + r.count, 0);
-  const totalPluginUses = pluginRows.reduce((a, r) => a + r.count, 0);
-  const totalCalls = totalMcpCalls + totalPluginUses;
-
-  // 모델별 토큰 (내 7일) — 30일 무관, 모든 면 공통. 캐시 포함(Dashboard 와 동일 기준).
-  const myModelItems = useMemo(() => {
-    if (!mySummary7) return [] as { label: string; value: number }[];
-    return mySummary7.by_model
+  // 모델별 토큰 (내 로컬) — 면별 summary 에서 derive. 캐시 포함(Dashboard 와 동일 기준).
+  // <synthetic>(모델 정보 없는 내부 이벤트, 토큰 0)과 0값 모델은 TOP 자리만 차지 — 제외.
+  function myModelItemsFor(r: LeaderboardRange) {
+    const s = mySummaryByRange[r];
+    if (!s) return [] as { label: string; value: number }[];
+    return s.by_model
+      .filter((m) => m.model !== "<synthetic>")
       .map((m) => ({
         label: m.model.replace("claude-", ""),
         value: m.input_tokens + m.output_tokens + m.cache_read + m.cache_write,
       }))
+      .filter((m) => m.value > 0)
       .sort((a, b) => b.value - a.value);
-  }, [mySummary7]);
+  }
 
   // 기간(range)별 KPI/분포 derive — 전체 슬라이드 각 면이 자기 기간 데이터를 렌더.
   function faceData(r: LeaderboardRange) {
@@ -135,6 +162,13 @@ export default function CompanyDashboard() {
   function renderFace(r: LeaderboardRange) {
     const { q, rrows, totals, activeUsers, stats, days } = faceData(r);
     const label = PERIOD_SUFFIX[r];
+    // MCP/플러그인/내 모델 — 면별 데이터 (캐러셀 전환 시 함께 갱신).
+    const mcpRows = mcpByRange[r].data ?? [];
+    const pluginRows = plgByRange[r].data ?? [];
+    const totalMcpCalls = mcpRows.reduce((a, x) => a + x.count, 0);
+    const totalPluginUses = pluginRows.reduce((a, x) => a + x.count, 0);
+    const totalCalls = totalMcpCalls + totalPluginUses;
+    const myModelItems = myModelItemsFor(r);
     return (
       <div className="grid grid-cols-12 gap-4 pr-1 pb-1">
         {/* ROW 1: 4 hero KPIs */}
@@ -190,7 +224,7 @@ export default function CompanyDashboard() {
           rightAccessory={<DotGrid count={activeUsers} max={16} />}
         />
         <KpiHero
-          eyebrow="MCP · 플러그인 호출 · 30일"
+          eyebrow={`MCP · 플러그인 호출 · ${label}`}
           value={totalCalls.toLocaleString("ko-KR")}
           suffix="건"
           color="violet"
@@ -249,9 +283,11 @@ export default function CompanyDashboard() {
         <section className="mc-card col-span-4">
           <header className="flex items-center justify-between mb-3 gap-3 relative">
             <span className="text-[15px] font-semibold text-text-primary tracking-[-0.005em]">
-              내 7일 모델별 토큰
+              내 모델별 토큰
             </span>
-            <span className="text-[11px] text-text-tertiary">로컬 · 전사 RPC 준비 중</span>
+            <span className="text-[11px] text-text-tertiary">
+              내 로컬 · {MY_MODEL_SUFFIX[r]}
+            </span>
           </header>
           <RankBarList
             items={myModelItems}
@@ -305,17 +341,19 @@ export default function CompanyDashboard() {
           </div>
         </section>
 
-        {/* ROW 3: 사내 MCP TOP 10 (col-6) + 플러그인 TOP 10 (col-6) — 30일 고정 */}
-        <section className="mc-card col-span-6">
+        {/* ROW 3: 사내 MCP TOP 10 (col-6) + 플러그인 TOP 10 (col-6) — 면별 기간 연동 */}
+        {/* flex-col + foot mt-auto — 행 수가 달라도 두 카드의 foot 요약이 하단에 정렬 */}
+        <section className="mc-card col-span-6 flex flex-col">
           <header className="flex items-center justify-between mb-3.5 gap-3 relative">
             <div className="flex items-center gap-2">
               <span className="text-[15px] font-semibold text-text-primary tracking-[-0.005em]">
                 사내 MCP TOP 10
               </span>
-              <span className="text-[11.5px] text-text-tertiary whitespace-nowrap">호출 횟수 · 30일</span>
+              <span className="text-[11.5px] text-text-tertiary whitespace-nowrap">호출 횟수 · {label}</span>
             </div>
           </header>
           <RankBarList
+            className="flex-1"
             items={mcpRows.map((m) => ({ label: m.mcp_server, value: m.count }))}
             formatValue={(v) => v.toLocaleString("ko-KR")}
             emptyMessage="MCP 호출 기록 없음"
@@ -326,22 +364,27 @@ export default function CompanyDashboard() {
               <strong className="num text-text-secondary font-semibold">
                 {totalMcpCalls.toLocaleString("ko-KR")}
               </strong>{" "}
-              호출 / 30일
+              호출 / {label}
             </span>
           </div>
         </section>
 
-        <section className="mc-card col-span-6">
+        <section className="mc-card col-span-6 flex flex-col">
           <header className="flex items-center justify-between mb-3.5 gap-3 relative">
             <div className="flex items-center gap-2">
               <span className="text-[15px] font-semibold text-text-primary tracking-[-0.005em]">
                 사내 플러그인 TOP 10
               </span>
-              <span className="text-[11.5px] text-text-tertiary whitespace-nowrap">활성 사용자 수 · 30일</span>
+              <span className="text-[11.5px] text-text-tertiary whitespace-nowrap">활성 사용자 수 · {label}</span>
             </div>
           </header>
           <RankBarList
-            items={pluginRows.map((p) => ({ label: p.plugin_id, value: p.count }))}
+            className="flex-1"
+            items={pluginRows.map((p) => ({
+              label: prettyPluginId(p.plugin_id),
+              title: p.plugin_id,
+              value: p.count,
+            }))}
             formatValue={(v) => v.toLocaleString("ko-KR")}
             emptyMessage="플러그인 사용 기록 없음"
           />
@@ -351,7 +394,7 @@ export default function CompanyDashboard() {
               <strong className="num text-text-secondary font-semibold">
                 {totalPluginUses.toLocaleString("ko-KR")}
               </strong>{" "}
-              사용 / 30일
+              사용 / {label}
             </span>
           </div>
         </section>

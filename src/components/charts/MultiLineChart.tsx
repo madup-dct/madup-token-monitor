@@ -134,9 +134,8 @@ export function MultiLineChart({ series, xLabels, formatValue, height = 280 }: P
 
         {/* area + line per visible series */}
         {visible.map((s) => {
-          const line = s.points
-            .map((v, i) => (i === 0 ? `M ${xOf(i)} ${yOf(v)}` : `L ${xOf(i)} ${yOf(v)}`))
-            .join(" ");
+          const pts = s.points.map((v, i) => ({ x: xOf(i), y: yOf(v) }));
+          const line = smoothLinePath(pts);
           const area = `${line} L ${xOf(n - 1)} ${PAD_TOP + innerH} L ${xOf(0)} ${PAD_TOP + innerH} Z`;
           return (
             <g key={s.label}>
@@ -263,4 +262,27 @@ export function MultiLineChart({ series, xLabels, formatValue, height = 280 }: P
       </div>
     </div>
   );
+}
+
+/// Catmull-Rom → cubic bezier 보간 — 주별/월별처럼 포인트가 적을 때(10~15개)
+/// 직선 폴리라인이 각져 보이는 것을 완화. DailyLineChart(45+ 포인트)는 직선으로도
+/// 매끈해 그대로 둔다. 장력 1/6 은 과한 overshoot 없이 부드러운 표준값.
+function smoothLinePath(pts: { x: number; y: number }[]): string {
+  if (pts.length === 0) return "";
+  if (pts.length < 3) {
+    return pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+  }
+  let d = `M ${pts[0]!.x} ${pts[0]!.y}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)]!;
+    const p1 = pts[i]!;
+    const p2 = pts[i + 1]!;
+    const p3 = pts[Math.min(pts.length - 1, i + 2)]!;
+    const c1x = p1.x + (p2.x - p0.x) / 6;
+    const c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6;
+    const c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2.x} ${p2.y}`;
+  }
+  return d;
 }
