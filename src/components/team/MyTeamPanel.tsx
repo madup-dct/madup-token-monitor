@@ -66,7 +66,7 @@ function toLeaderboard(rows: TeamMemberUsage[]): CompanyLeaderboardEntry[] {
 /// 기간(오늘/주/월) 전환 시 전체가 한 face 로 함께 슬라이드된다.
 /// 접근 제어: admin 은 전체 팀, 비-admin(팀리드 포함)은 본인 소속 팀만.
 export function MyTeamPanel() {
-  const { user, role, myTeamIds } = useAuthUser();
+  const { user, role } = useAuthUser();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const isAdmin = roleAtLeast(role, "admin");
@@ -109,10 +109,17 @@ export function MyTeamPanel() {
     onError: (e) => setLeaveError(e instanceof Error ? e.message : String(e)),
   });
 
+  // membershipsQ 는 leave 시 invalidate 되어 갱신되지만 useAuthUser().myTeamIds 는 mount 시 1회 로드라
+  // 나간 팀이 목록에 남는 문제가 있어, 비-admin 필터는 membershipsQ 기반으로 계산한다.
+  const myMembershipTeamIds = useMemo(
+    () => new Set((membershipsQ.data ?? []).map((m) => m.team_id)),
+    [membershipsQ.data],
+  );
+
   const teams: Team[] = useMemo(() => {
     const all = teamsQ.data ?? [];
-    return isAdmin ? all : all.filter((t) => myTeamIds.includes(t.id));
-  }, [teamsQ.data, myTeamIds, isAdmin]);
+    return isAdmin ? all : all.filter((t) => myMembershipTeamIds.has(t.id));
+  }, [teamsQ.data, myMembershipTeamIds, isAdmin]);
 
   useEffect(() => {
     if (teams.length === 0) {
@@ -123,6 +130,13 @@ export function MyTeamPanel() {
       setSelectedTeamId(teams[0]!.id);
     }
   }, [teams, selectedTeamId]);
+
+  // 확인 중(confirmLeave)에 Select 로 다른 팀으로 전환하면 이전 팀 확인 상태가 남아
+  // 새 팀을 대상으로 나가기가 실행될 수 있어, 팀 전환 시 확인/에러 상태를 초기화한다.
+  useEffect(() => {
+    setConfirmLeave(false);
+    setLeaveError(null);
+  }, [selectedTeamId]);
 
   const period = LB_RANGES[carouselIdx]!;
   const periodLabel = LB_LABEL[period];
@@ -547,12 +561,15 @@ export function MyTeamPanel() {
                   onClick={() => selectedTeamId && leaveMut.mutate(selectedTeamId)}
                   className="px-3 py-1.5 rounded-md bg-rose-500/20 text-rose-200 text-[12px] font-semibold disabled:opacity-50"
                 >
-                  {leaveMut.isPending ? "나가는 중…" : "정말 나가기"}
+                  {leaveMut.isPending
+                    ? "나가는 중…"
+                    : `${selectedTeam?.name ?? "팀"} 나가기`}
                 </button>
                 <button
                   type="button"
+                  disabled={leaveMut.isPending}
                   onClick={() => setConfirmLeave(false)}
-                  className="px-3 py-1.5 rounded-md bg-surface-2 text-text-secondary text-[12px] font-semibold"
+                  className="px-3 py-1.5 rounded-md bg-surface-2 text-text-secondary text-[12px] font-semibold disabled:opacity-50"
                 >
                   취소
                 </button>
