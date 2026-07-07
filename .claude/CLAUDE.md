@@ -205,6 +205,17 @@ git push origin v0.1.x
   → 단가 추가 후 릴리즈하면 각 기기 로컬 DB 가 자동 치유되고 다음 sync 가 Supabase 를 덮어쓴다.
   Supabase 직접 UPDATE 는 금물 — hourly sync(최근 30일, merge-duplicates 치환)가 되돌린다.
 
+### 6.9 Supabase RPC 날짜 경계는 `kst_today()` — `current_date`(UTC) 금지
+- 날짜 버킷(`usage_aggregates.date` 등)은 클라이언트가 KST 달력 날짜로 만들지만
+  Supabase Postgres 세션 tz 는 UTC. RPC 필터에 `current_date` 를 쓰면 KST 00~09시
+  사이 "오늘"이 전날로 계산돼 전일 데이터가 합산 표시된다 (2026-07-03 발견,
+  0021 에서 집계 RPC 16개 일괄 교정).
+- **새 RPC 에서 날짜 경계가 필요하면 `kst_today()`(0021 정의) 사용.**
+  `usage_hourly.hour_utc`(timestamptz) 비교는 KST 자정을 변환:
+  `hour_utc >= timezone('Asia/Seoul', (kst_today() - (N || ' days')::interval))`.
+- 로컬 SQLite 쪽 `db.rs::range_bounds` 는 `chrono::Local` 자정 기준 — 양쪽 정의를
+  항상 일치시킬 것.
+
 ## 7. 데이터 흐름 (요약)
 
 ```

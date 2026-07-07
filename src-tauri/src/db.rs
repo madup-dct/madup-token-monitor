@@ -274,8 +274,8 @@ pub fn insert_tool_call(conn: &Connection, t: &ToolCall) -> Result<()> {
 }
 
 /// Returns unix-ms range for the given range string.
-/// 모든 range를 local-tz 자정 기준 + Postgres `current_date - interval 'N days'`와 일치하는
-/// "오늘 자정 - N일" 시작점으로 통일. 사내 RPC와 동일 정의.
+/// 모든 range를 local-tz 자정 기준 + Postgres `kst_today() - interval 'N days'`(0021)와
+/// 일치하는 "오늘 자정 - N일" 시작점으로 통일. 사내 RPC와 동일 정의 (KST 달력 경계).
 pub fn range_bounds(range: &str) -> (i64, i64) {
     use chrono::{Duration, Local, TimeZone};
     let now = chrono::Utc::now().timestamp_millis();
