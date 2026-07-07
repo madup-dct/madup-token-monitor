@@ -335,3 +335,51 @@ export async function fetchUsers(limit = 300): Promise<ProfileLite[]> {
   if (error || !data) return [];
   return data as ProfileLite[];
 }
+
+/// 팀 삭제 — owner 이고 팀원이 본인뿐일 때만 성공(RPC 가 규칙 강제). 그 외 예외 throw.
+export async function deleteTeam(teamId: string): Promise<void> {
+  const { error } = await supabase.rpc("delete_team", { p_team_id: teamId });
+  if (error) throw error;
+}
+
+/// 팀장 이전 — owner→member, 대상→owner. 대상은 app-role team_leader+ 인 기존 멤버만(RPC 강제).
+export async function transferTeamOwner(teamId: string, newOwnerId: string): Promise<void> {
+  const { error } = await supabase.rpc("transfer_team_owner", {
+    p_team_id: teamId,
+    p_new_owner: newOwnerId,
+  });
+  if (error) throw error;
+}
+
+/// 팀 나가기 — 일반 멤버 본인 탈퇴. owner 는 RPC 가 거부(팀장 먼저 이전).
+export async function leaveTeam(teamId: string): Promise<void> {
+  const { error } = await supabase.rpc("leave_team", { p_team_id: teamId });
+  if (error) throw error;
+}
+
+/// 팀 멤버들의 전역 app-role 조회 (팀장 위임 대상 게이팅용). owner/admin 만 호출 가능.
+/// 반환: user_id → app_role 맵. RPC 실패(비관리자 등) 시 빈 맵.
+export async function fetchTeamMemberRoles(teamId: string): Promise<Record<string, AppRole>> {
+  const { data, error } = await supabase.rpc("get_team_member_roles", { p_team_id: teamId });
+  if (error || !data) return {};
+  const map: Record<string, AppRole> = {};
+  for (const r of data as { user_id: string; app_role: string }[]) {
+    map[r.user_id] = (r.app_role as AppRole) ?? "user";
+  }
+  return map;
+}
+
+/// 현재 로그인 유저의 (team_id, role) 목록 — owner 뱃지 / 나가기 게이팅용.
+export async function fetchMyMemberships(): Promise<
+  { team_id: string; role: TeamMember["role"] }[]
+> {
+  const { data: sess } = await supabase.auth.getSession();
+  const uid = sess.session?.user.id;
+  if (!uid) return [];
+  const { data, error } = await supabase
+    .from("team_members")
+    .select("team_id, role")
+    .eq("user_id", uid);
+  if (error || !data) return [];
+  return data as { team_id: string; role: TeamMember["role"] }[];
+}
