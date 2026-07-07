@@ -49,6 +49,13 @@ fi
 command -v gh >/dev/null  || { echo "::error:: gh CLI 필요"; exit 1; }
 gh auth status >/dev/null || { echo "::error:: gh 로그인 필요 (gh auth login)"; exit 1; }
 
+# .env 프론트 필수값 가드 — VITE_SUPABASE_URL 이 없으면 vite 가 빈 값으로 inline 해
+# 앱이 시작 즉시 supabase createClient 에서 크래시(빈 화면)한다 (v0.8.0 사고 재발 방지).
+if ! grep -qE '^VITE_SUPABASE_URL=https' .env 2>/dev/null; then
+  echo "::error:: .env 에 VITE_SUPABASE_URL(https…) 이 없다. Supabase 값을 .env 에 채워라 (.env.example 참고). 빌드 중단."
+  exit 1
+fi
+
 VERSION="$(node -p "require('./package.json').version")"
 CONF_VERSION="$(node -p "require('./src-tauri/tauri.conf.json').version")"
 if [ "$VERSION" != "$CONF_VERSION" ]; then
@@ -64,6 +71,13 @@ for target in "${TARGETS[@]}"; do
   echo "▶ 빌드: $target"
   pnpm tauri build --target "$target"
 done
+
+# 빌드 산출 프론트 번들에 Supabase URL 이 실제로 inline 됐는지 확인 (env inlining 실패 방어).
+# 없으면 앱이 빈 화면으로 시작하므로 업로드하지 않고 중단.
+if ! grep -q 'supabase\.co' dist/assets/index-*.js 2>/dev/null; then
+  echo "::error:: 빌드된 번들에 Supabase URL 이 inline 되지 않았다 — env 확인 필요. 업로드 중단."
+  exit 1
+fi
 
 # --- 아티팩트 수집 + latest.json 조립 --------------------------------------
 STAGE="$(mktemp -d)"
