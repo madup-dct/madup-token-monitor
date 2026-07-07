@@ -69,7 +69,8 @@ done
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-PLATFORMS=""   # latest.json platforms 항목 누적
+PLATFORMS=""   # latest.json platforms 항목 (콤마로 구분 — trailing comma 안 생기게 prepend)
+PSEP=""        # 두 번째 항목부터 앞에 ",\n" 를 붙인다
 
 for target in "${TARGETS[@]}"; do
   BUNDLE="src-tauri/target/${target}/release/bundle"
@@ -93,17 +94,18 @@ for target in "${TARGETS[@]}"; do
   # dmg (사람이 직접 받는 설치 파일) — 이미 arch 가 파일명에 포함됨
   cp "$BUNDLE"/dmg/*.dmg "$STAGE/"
 
-  PLATFORMS="${PLATFORMS}    \"${key}\": { \"signature\": \"${sig}\", \"url\": \"${url}\" },"$'\n'
+  PLATFORMS="${PLATFORMS}${PSEP}    \"${key}\": { \"signature\": \"${sig}\", \"url\": \"${url}\" }"
+  PSEP=$',\n'   # 다음 항목부터 콤마+개행으로 구분 (bash 3.2 의 %-pattern 제거 회피)
 done
 
-# 마지막 콤마 제거 후 latest.json 작성
+# latest.json 작성 (PLATFORMS 는 이미 콤마 구분·trailing comma 없음)
 cat > "$STAGE/latest.json" <<EOF
 {
   "version": "${VERSION}",
   "notes": "GitHub Releases에서 자동 업데이트가 지원됩니다.",
   "pub_date": "${PUB_DATE}",
   "platforms": {
-${PLATFORMS%,$'\n'}
+${PLATFORMS}
   }
 }
 EOF
