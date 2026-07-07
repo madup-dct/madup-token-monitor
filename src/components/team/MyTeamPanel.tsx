@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { roleAtLeast } from "@/hooks/useRole";
 import {
+  fetchMyMemberships,
   fetchMyTeams,
   fetchTeamAggregates,
   fetchTeamMcp,
   fetchTeamMembersUsage,
   fetchTeamPlugins,
   fetchTeamTopModels,
+  leaveTeam,
 } from "@/lib/teams";
 import type { TeamTopModel } from "@/lib/teams";
 import { formatTokensCompact, formatUSD, formatKRW } from "@/lib/format";
@@ -85,6 +87,26 @@ export function MyTeamPanel() {
     queryKey: ["my_teams", user?.id ?? "anon"],
     queryFn: fetchMyTeams,
     enabled: !!user,
+  });
+
+  const membershipsQ = useQuery({
+    queryKey: ["my_memberships", user?.id ?? "anon"],
+    queryFn: fetchMyMemberships,
+    enabled: !!user,
+  });
+  const [leaveError, setLeaveError] = useState<string | null>(null);
+  const [confirmLeave, setConfirmLeave] = useState(false);
+
+  const leaveMut = useMutation({
+    mutationFn: (teamId: string) => leaveTeam(teamId),
+    onSuccess: () => {
+      setConfirmLeave(false);
+      setLeaveError(null);
+      qc.invalidateQueries({ queryKey: ["my_teams"] });
+      qc.invalidateQueries({ queryKey: ["my_memberships"] });
+      qc.invalidateQueries({ queryKey: ["team_aggregates"] });
+    },
+    onError: (e) => setLeaveError(e instanceof Error ? e.message : String(e)),
   });
 
   const teams: Team[] = useMemo(() => {
@@ -180,6 +202,10 @@ export function MyTeamPanel() {
   const memberCount = teamAgg ? Number(teamAgg.member_count) : 0;
 
   const selectedTeam = teams.find((t) => t.id === selectedTeamId) ?? null;
+
+  const myRoleInSelected =
+    (membershipsQ.data ?? []).find((m) => m.team_id === selectedTeamId)?.role ?? null;
+  const canLeaveSelected = myRoleInSelected !== null && myRoleInSelected !== "owner";
 
   // 기간(index)별 멤버 derive — 전체 슬라이드 각 면이 자기 기간 데이터를 렌더.
   function faceData(i: number) {
@@ -512,8 +538,43 @@ export function MyTeamPanel() {
             </svg>
             {refreshing ? "동기화 중…" : "새로고침"}
           </button>
+          {canLeaveSelected ? (
+            confirmLeave ? (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={leaveMut.isPending}
+                  onClick={() => selectedTeamId && leaveMut.mutate(selectedTeamId)}
+                  className="px-3 py-1.5 rounded-md bg-rose-500/20 text-rose-200 text-[12px] font-semibold disabled:opacity-50"
+                >
+                  {leaveMut.isPending ? "나가는 중…" : "정말 나가기"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmLeave(false)}
+                  className="px-3 py-1.5 rounded-md bg-surface-2 text-text-secondary text-[12px] font-semibold"
+                >
+                  취소
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmLeave(true)}
+                className="px-3 py-1.5 rounded-md bg-surface-2 text-text-tertiary hover:text-rose-300 text-[12px] font-semibold"
+              >
+                팀 나가기
+              </button>
+            )
+          ) : null}
         </div>
       </div>
+
+      {leaveError ? (
+        <div className="text-[12px] text-rose-300 bg-rose-500/10 border border-rose-500/20 rounded-md px-3 py-2">
+          {leaveError}
+        </div>
+      ) : null}
 
       {/* 전체 슬라이드 — 기간 전환 시 KPI·리더보드·분포·MCP/플러그인이 함께 회전 */}
       <PrismCarousel
