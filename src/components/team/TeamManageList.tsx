@@ -3,17 +3,21 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import {
   createTeam,
+  deleteTeam,
+  fetchMyMemberships,
   fetchMyTeams,
   fetchTeamAggregates,
+  fetchTeamMemberRoles,
   fetchTeamMembers,
   inviteMembersToTeam,
   removeTeamMember,
+  transferTeamOwner,
 } from "@/lib/teams";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { formatTokensCompact, formatUSD } from "@/lib/format";
 import { TeamDashboardPanel } from "@/components/team/TeamDashboardPanel";
 import { MemberInvitePicker } from "@/components/team/MemberInvitePicker";
-import type { Team, TeamMemberWithProfile } from "@/types/models";
+import type { AppRole, Team, TeamMemberWithProfile } from "@/types/models";
 
 const TEAM_ROLE_RANK: Record<TeamMemberWithProfile["role"], number> = {
   owner: 0,
@@ -57,6 +61,15 @@ function TeamListView({ onSelect }: { onSelect: (teamId: string) => void }) {
     queryFn: fetchMyTeams,
     enabled: !!user,
   });
+  const membershipsQ = useQuery({
+    queryKey: ["my_memberships", user?.id ?? "anon"],
+    queryFn: fetchMyMemberships,
+    enabled: !!user,
+  });
+  const ownedTeamIds = useMemo(
+    () => new Set((membershipsQ.data ?? []).filter((m) => m.role === "owner").map((m) => m.team_id)),
+    [membershipsQ.data],
+  );
   const aggsQ = useQuery({
     queryKey: ["team_aggregates", 30],
     queryFn: () => fetchTeamAggregates(30),
@@ -175,7 +188,14 @@ function TeamListView({ onSelect }: { onSelect: (teamId: string) => void }) {
                     className="border-t border-hairline cursor-pointer hover:bg-surface-2/40 transition-colors"
                   >
                     <td className="px-5 py-3 text-[12.5px] text-text-primary font-semibold">
-                      {t.name}
+                      <span className="inline-flex items-center gap-1.5">
+                        {t.name}
+                        {ownedTeamIds.has(t.id) ? (
+                          <span className="px-1.5 py-0.5 rounded bg-azure-bright/15 text-azure text-[9.5px] font-bold tracking-[0.06em] uppercase">
+                            팀장
+                          </span>
+                        ) : null}
+                      </span>
                     </td>
                     <td className="px-5 py-3 text-[12px] text-text-tertiary">{t.slug}</td>
                     <td className="px-5 py-3 text-right text-[12px] text-text-primary tabular-nums">
@@ -229,6 +249,50 @@ function TeamDetail({ teamId, onBack }: { teamId: string; onBack: () => void }) 
     [membersQ.data, user?.id]
   );
   const canManage = myTeamRole === "owner" || myTeamRole === "admin";
+  const isOwner = myTeamRole === "owner";
+  const memberRolesQ = useQuery({
+    queryKey: ["team_member_roles", teamId],
+    queryFn: () => fetchTeamMemberRoles(teamId),
+    enabled: !!teamId && isOwner,
+  });
+  const memberRoles: Record<string, AppRole> = memberRolesQ.data ?? {};
+  const [transferId, setTransferId] = useState<string | null>(null);
+
+  const transferMut = useMutation({
+    mutationFn: (userId: string) => transferTeamOwner(teamId, userId),
+    onSuccess: () => {
+      setTransferId(null);
+      setError(null);
+      setNotice("팀장을 이전했습니다");
+      qc.invalidateQueries({ queryKey: ["team_members", teamId] });
+      qc.invalidateQueries({ queryKey: ["team_member_roles", teamId] });
+      qc.invalidateQueries({ queryKey: ["my_memberships"] });
+      qc.invalidateQueries({ queryKey: ["my_teams"] });
+    },
+    onError: (e) => {
+      setNotice(null);
+      setError(e instanceof Error ? e.message : String(e));
+    },
+  });
+
+  const memberCount = (membersQ.data ?? []).length;
+  const canDelete = isOwner && memberCount <= 1;
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const deleteMut = useMutation({
+    mutationFn: () => deleteTeam(teamId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["my_teams"] });
+      qc.invalidateQueries({ queryKey: ["my_memberships"] });
+      qc.invalidateQueries({ queryKey: ["team_aggregates"] });
+      onBack();
+    },
+    onError: (e) => {
+      setConfirmDelete(false);
+      setNotice(null);
+      setError(e instanceof Error ? e.message : String(e));
+    },
+  });
 
   const inviteMut = useMutation({
     mutationFn: (userIds: string[]) => inviteMembersToTeam(teamId, userIds),
@@ -329,6 +393,11 @@ function TeamDetail({ teamId, onBack }: { teamId: string; onBack: () => void }) 
                     m.profile?.email ??
                     m.user_id;
                   const removable = m.role !== "owner" && m.user_id !== user?.id;
+                  const transferable =
+                    isOwner &&
+                    m.role !== "owner" &&
+                    m.user_id !== user?.id &&
+                    ["team_leader", "manager", "admin"].includes(memberRoles[m.user_id] ?? "user");
                   return (
                     <li
                       key={m.user_id}
@@ -354,6 +423,36 @@ function TeamDetail({ teamId, onBack }: { teamId: string; onBack: () => void }) 
                       <span className="text-[10px] font-bold uppercase tracking-[0.06em] text-text-tertiary shrink-0">
                         {m.role}
                       </span>
+                      {transferable ? (
+                        transferId === m.user_id ? (
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              disabled={transferMut.isPending}
+                              onClick={() => transferMut.mutate(m.user_id)}
+                              className="px-2.5 py-1 rounded-md bg-azure-bright/15 text-azure text-[11px] font-semibold disabled:opacity-50"
+                            >
+                              팀장 위임
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setTransferId(null)}
+                              className="px-2.5 py-1 rounded-md bg-surface-2 text-text-secondary text-[11px] font-semibold"
+                            >
+                              취소
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setTransferId(m.user_id)}
+                            title="이 멤버를 팀장으로 위임"
+                            className="px-2 py-1 rounded-md text-[11px] font-semibold text-text-tertiary hover:text-azure shrink-0"
+                          >
+                            팀장 위임
+                          </button>
+                        )
+                      ) : null}
                       {removable ? (
                         confirmingId === m.user_id ? (
                           <div className="flex items-center gap-1.5 shrink-0">
@@ -393,6 +492,52 @@ function TeamDetail({ teamId, onBack }: { teamId: string; onBack: () => void }) 
                   );
                 })}
             </ul>
+          )}
+        </div>
+      ) : null}
+
+      {/* 팀 삭제 — owner 전용 danger zone. 팀원이 남아 있으면 경고 + 비활성. */}
+      {isOwner ? (
+        <div className="mc-card p-4 border border-rose-500/20">
+          <div className="text-[11px] font-bold tracking-[0.12em] uppercase text-rose-300/80 mb-2">
+            위험 구역
+          </div>
+          {memberCount > 1 ? (
+            <p className="text-[12px] text-text-tertiary mb-3">
+              팀원 {memberCount - 1}명을 모두 내보낸 뒤에 팀을 삭제할 수 있습니다.
+            </p>
+          ) : (
+            <p className="text-[12px] text-text-tertiary mb-3">
+              이 팀을 삭제하면 되돌릴 수 없습니다.
+            </p>
+          )}
+          {confirmDelete && canDelete ? (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={deleteMut.isPending}
+                onClick={() => deleteMut.mutate()}
+                className="px-3 py-1.5 rounded-md bg-rose-500/20 text-rose-200 text-[12px] font-semibold disabled:opacity-50"
+              >
+                {deleteMut.isPending ? "삭제 중…" : "정말 삭제"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(false)}
+                className="px-3 py-1.5 rounded-md bg-surface-2 text-text-secondary text-[12px] font-semibold"
+              >
+                취소
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              disabled={!canDelete}
+              onClick={() => setConfirmDelete(true)}
+              className="px-3 py-1.5 rounded-md bg-rose-500/15 text-rose-300 text-[12px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              팀 삭제
+            </button>
           )}
         </div>
       ) : null}
