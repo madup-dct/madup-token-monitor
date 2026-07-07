@@ -71,12 +71,15 @@ trap 'rm -rf "$STAGE"' EXIT
 PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 PLATFORMS=""   # latest.json platforms 항목 누적
 
-declare -A ARCH_KEY=([aarch64-apple-darwin]=darwin-aarch64 [x86_64-apple-darwin]=darwin-x86_64)
-
 for target in "${TARGETS[@]}"; do
   BUNDLE="src-tauri/target/${target}/release/bundle"
-  key="${ARCH_KEY[$target]}"
   arch="${target%%-*}"  # aarch64 | x86_64
+  # bash 3.2(macOS 기본)엔 연관배열(declare -A)이 없어 case 로 tauri updater platform 키 매핑.
+  case "$target" in
+    aarch64-apple-darwin) key="darwin-aarch64" ;;
+    x86_64-apple-darwin)  key="darwin-x86_64" ;;
+    *) echo "::error:: 알 수 없는 target $target"; exit 1 ;;
+  esac
 
   # 업데이터 아티팩트 (.app.tar.gz + .sig) — 두 타깃이 동일 basename 이라 arch 접미사로 충돌 회피
   src_tar="$(echo "$BUNDLE"/macos/*.app.tar.gz)"
