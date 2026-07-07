@@ -27,14 +27,14 @@ Claude / Codex / Gemini 등 AI CLI 도구의 토큰 사용량과 비용을 로�
 | 로컬 DB | SQLite (rusqlite) |
 | 패키지 매니저 | pnpm 11 |
 | Node | 24 (engines.node 강제) |
-| CI/CD | GitHub Actions + tauri-action@v0 |
+| 릴리즈 | 로컬 빌드 + `gh release` (CI 미사용 — `scripts/release.sh`) |
 
 ## 2. 디렉토리 구조
 
 ```
 madup_token_monitoring/
 ├── .claude/                # AI 컨텍스트 (이 파일)
-├── .github/workflows/      # CI: build.yml, release.yml
+├── scripts/release.sh      # 로컬 릴리즈 (빌드·서명·latest.json·gh release)
 ├── docs/                   # 외부 시스템 설정 가이드
 │   ├── auth-callback/      # GitHub Pages 의 OAuth success 페이지
 │   ├── index.html          # GitHub Pages 진입
@@ -80,8 +80,7 @@ madup_token_monitoring/
 | Supabase | Auth, Postgres, Realtime, RPC | `docs/SUPABASE_SETUP.md` |
 | Slack | OIDC OAuth provider (사내 워크스페이스) | `docs/SLACK_APP_SETUP.md` |
 | GitHub Pages | OAuth success 리다이렉트 페이지 | `docs/auth-callback/` (브랜치: main, 폴더: docs/) |
-| GitHub Actions | macOS 빌드 + GitHub Releases 자동화 | `.github/workflows/release.yml` |
-| GitHub Repository Secrets | env / 서명 키 주입 | `docs/GITHUB_SECRETS.md` |
+| GitHub Releases | 로컬 빌드 산출물 배포 (CI 미사용, `scripts/release.sh`) | `docs/AUTO_UPDATE_SETUP.md` |
 | Tauri Updater | GitHub Releases 기반 자동 업데이트 | `docs/AUTO_UPDATE_SETUP.md` |
 
 > **Supabase DB 직접 작업(SELECT / RPC / 마이그레이션 / RLS)은 `.claude/agents/supabase-cli-agent.md` 로 위임 — 우회 금지.**
@@ -116,22 +115,25 @@ pnpm tauri build
 
 ## 5. 빌드 / 릴리즈 흐름
 
-태그 push → 자동 빌드 → Draft Release → 사용자가 publish.
+**로컬 릴리즈** — GitHub Actions(macOS 러너) 비용 폭주로 CI 빌드를 폐지했다.
+빌드·서명·업로드를 전부 로컬에서 수행. (`build.yml`/`release.yml` 삭제됨.)
 
 ```bash
 # 1) 코드 변경 + version 일치
-#    package.json + src-tauri/tauri.conf.json 둘 다 동일한 SemVer 로 갱신
-# 2) commit + tag + push
-git commit -m "feat: ..."
-git push origin main
-git tag v0.1.x -m "v0.1.x — 요약"
-git push origin v0.1.x
-# 3) .github/workflows/release.yml 트리거 → tauri-action 으로 macOS aarch64 + x86_64 빌드
-#    → GitHub Releases 의 Draft 에 .dmg ×2 + .app.tar.gz ×2 + *.sig + latest.json 업로드
-# 4) 검증 후 GitHub UI / `gh release edit v0.1.x --draft=false` 로 publish
+#    package.json + src-tauri/tauri.conf.json 둘 다 동일한 SemVer 로 갱신 후 commit
+# 2) 서명 키 export (docs/AUTO_UPDATE_SETUP.md 1.1/1.2)
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/madup-token-monitor.key)"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD='<생성 시 비밀번호>'
+# 3) 로컬 릴리즈 스크립트 — macOS aarch64 + x86_64 빌드·서명 + latest.json 조립 +
+#    .dmg ×2 / .app.tar.gz ×2 / *.sig / latest.json 을 Draft Release 로 업로드
+bash scripts/release.sh
+# 4) 검증 후 `gh release edit v0.1.x --draft=false` 로 publish
 #    publish 시점에 latest.json 이 .../releases/latest/download/latest.json 으로 노출 →
 #    기존 설치 사용자의 자동 업데이트 활성화
 ```
+
+> Windows(nsis) 는 macOS 에서 빌드 불가 → 현재 배포는 macOS 2종만. Windows 배포가 다시 필요하면
+> Windows 머신에서 별도 빌드하거나 CI 를 부분 복구해야 한다.
 
 ## 6. 알려진 함정 (이미 학습한 것)
 
@@ -170,7 +172,9 @@ git push origin v0.1.x
 - **public 키와 private 키 비밀번호 불일치는 "Invalid signing private key password" 로 빌드를 멈춘다.**
   키 회전 시 `tauri.conf.json` 의 `pubkey` 와 GitHub Secret 의 비밀번호를 동시에 갱신.
 
-### 6.4 GitHub Actions / vite secret inject
+### 6.4 GitHub Actions / vite secret inject (⚠️ 과거 기록 — CI 빌드 폐지됨)
+> 비용 폭주로 `build.yml`/`release.yml` 삭제, 릴리즈는 `scripts/release.sh` 로컬 전환.
+> 아래는 CI 를 다시 도입할 경우를 위한 학습 기록.
 - **`tauri-apps/tauri-action@v0` 가 step `env:` 의 `VITE_*` 를 sub-process 로 forwarding 하지 않는
   케이스가 있다.**
   → workflow 에 `Write .env` step 을 추가해 secrets 를 명시적으로 `.env` 파일로 떨어뜨려야 vite 가
@@ -300,7 +304,7 @@ rowid 재사용으로 워터마크가 신규 이벤트를 영구 누락시킨다
 5. `src/lib/auth.ts` — OAuth callback 처리
 6. `src/lib/supabase.ts` — supabase 클라이언트 + signInWithSlack
 7. `src-tauri/src/lib.rs` — Tauri Builder + plugin 순서
-8. `.github/workflows/release.yml` — 빌드 파이프라인 (`Write .env` step 이 핵심)
+8. `scripts/release.sh` — 로컬 릴리즈 파이프라인 (빌드·서명·latest.json·업로드)
 
 자주 참조:
 - `src/pages/Dashboard.tsx` — 가장 큰 페이지. granularity / period / metric / view 의 4축 제어.
@@ -313,10 +317,8 @@ rowid 재사용으로 워터마크가 신규 이벤트를 영구 누락시킨다
 - [ ] 새 RPC / DB 변경이면 `supabase/migrations/*.sql` 작성 + Studio 적용
 - [ ] 새 Tauri command 면 `lib.rs` 의 `invoke_handler!` 에 추가
 - [ ] 새 plugin 권한이면 `capabilities/default.json` 의 `permissions` 에 추가
-- [ ] 버전 bump 시 `package.json` + `src-tauri/tauri.conf.json` 둘 다
-- [ ] `.env` 변수 새로 추가 시 `release.yml` / `build.yml` 의 `Write .env` step 에도 같이 작성
-- [ ] secret 새로 추가 시 `gh secret set` + `docs/GITHUB_SECRETS.md` 갱신
-- [ ] 문서만 변경하면 `[skip ci]` 를 commit 메시지에 포함하거나 build.yml 의 paths-ignore 가 처리
+- [ ] 버전 bump 시 `package.json` + `src-tauri/tauri.conf.json` 둘 다 (스크립트가 불일치 시 중단)
+- [ ] `.env` 변수 새로 추가 시 로컬 `.env` 갱신 (CI 없음 — `scripts/release.sh` 는 로컬 `.env` 를 그대로 사용)
 
 ## 11. 자주 쓰는 명령
 
@@ -324,8 +326,8 @@ rowid 재사용으로 워터마크가 신규 이벤트를 영구 누락시킨다
 # 자기 사용량 즉시 sync (개발 중 데이터 빠르게 보고 싶을 때)
 # 앱 안에서 Settings 페이지의 "지금 동기화" 버튼
 
-# 빌드 watch
-gh run watch <run-id> --exit-status
+# 로컬 릴리즈 (서명 키 export 후) — 빌드·서명·latest.json·Draft 업로드까지
+bash scripts/release.sh
 
 # Draft release publish
 gh release edit v0.1.x --draft=false

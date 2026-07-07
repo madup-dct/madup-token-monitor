@@ -85,9 +85,27 @@ pnpm tauri dev
 
 ### 빌드
 
+로컬 개발 빌드:
+
 ```bash
 pnpm tauri build
 ```
+
+### 릴리즈 (로컬)
+
+GitHub Actions(macOS 러너) 비용 문제로 CI 빌드는 폐지했습니다. 릴리즈는 전부 로컬에서 수행합니다.
+
+```bash
+# 1) package.json + src-tauri/tauri.conf.json 의 version 을 동일하게 bump 후 commit
+# 2) 로컬 릴리즈 스크립트 — macOS(arm64 + x86_64) 빌드·서명 + latest.json 조립 +
+#    dmg / app.tar.gz / sig / latest.json 을 Draft Release 로 업로드
+bash scripts/release.sh
+# 3) 검토 후 발행
+gh release edit v0.7.0 --draft=false
+```
+
+- **서명 키**: `release.sh` 는 `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 환경변수가 있으면 그대로 쓰고, 없으면 **AWS SSM Parameter Store**(dct-madup, ap-northeast-2)에서 자동으로 가져옵니다. AWS 권한만 있으면 키 파일·비밀번호 없이 릴리즈할 수 있습니다. 셋업 상세는 [`docs/AUTO_UPDATE_SETUP.md`](docs/AUTO_UPDATE_SETUP.md) 참고.
+- Windows(nsis) 는 macOS 에서 빌드 불가 → 현재 로컬 릴리즈 배포는 macOS 2종(arm64/x86_64)만 포함합니다.
 
 ### Supabase 마이그레이션
 
