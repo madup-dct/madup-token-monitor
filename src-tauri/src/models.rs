@@ -17,9 +17,9 @@ pub struct UsageEvent {
     pub cost_usd: Option<f64>,
     pub project: Option<String>,
     pub session_id: Option<String>,
-    /// Claude Code message.id — used for dedup across mirrored jsonl files
+    /// Provider message/turn id used for dedup across mirrored log files.
     pub message_id: Option<String>,
-    /// Claude Code requestId — pairs with message_id for dedup
+    /// Provider request/usage identity paired with message_id for dedup.
     pub request_id: Option<String>,
 }
 
@@ -102,4 +102,3 @@ pub struct ToolUsage {
     pub tool_name: String,
     pub count: i64,
 }
-

@@ -63,7 +63,8 @@ madup_token_monitoring/
 │       ├── tray.rs         # 메뉴바 아이콘 + popover 위치 + spawn_title_updater
 │       ├── commands.rs     # tauri::command (get_summary, get_timeseries, get_today_cost_usd, ...)
 │       ├── db.rs           # SQLite 스키마 + range_bounds("1d"|"7d"|"30d"|"365d"|"all")
-│       ├── parser.rs       # JSONL 사용 로그 파서 (Claude Code, Codex, Gemini)
+│       ├── parser.rs       # JSONL 파서 façade 및 공통 chunk 처리
+│       ├── parser/         # claude.rs, codex.rs, opencode.rs provider 파서
 │       ├── watcher.rs      # 파일 워처 (tokio + notify)
 │       ├── aggregator.rs   # Supabase 집계 업로드 (sync_aggregates_now)
 │       ├── pricing.rs      # 모델별 단가 테이블
@@ -220,12 +221,22 @@ bash scripts/release.sh
 - 로컬 SQLite 쪽 `db.rs::range_bounds` 는 `chrono::Local` 자정 기준 — 양쪽 정의를
   항상 일치시킬 것.
 
+### 6.10 Codex rollout 파싱 및 dedup
+- Codex 최신 rollout 은 `event_msg` 안의 `payload.type=token_count`와
+  `payload.info.last_token_usage`를 사용한다. 누적 `total_token_usage`는 dedup identity로만
+  사용하고, 실제 집계는 요청별 `last_token_usage`를 합산한다.
+- `input_tokens`에는 캐시 입력이 포함되므로 `input_tokens - cached_input_tokens`를 일반 입력으로
+  저장하고 캐시 입력은 `cache_read`로 분리한다. 음수·불일치 usage는 저장하지 않는다.
+- fork된 subagent rollout에 복사된 부모 turn은 제외하고, child 자신의 turn부터만 집계한다.
+- GPT-5.6 Codex 모델(`gpt-5.6-sol/terra/luna`) 단가는 `src-tauri/pricing.json`에 공식 가격 기준으로
+  등록한다. 새 모델 추가 시 `pricing.rs` 회귀 테스트도 함께 갱신한다.
+
 ## 7. 데이터 흐름 (요약)
 
 ```
-~/.claude/projects/**/*.jsonl, ~/.codex/**, ~/.gemini/**
+~/.claude/projects/**/*.jsonl, ~/.codex/sessions/**/*.jsonl, ~/.gemini/**
   ↓ (watcher.rs: notify crate)
-parser.rs → usage_events table (SQLite)
+parser.rs → parser/{claude,codex,opencode}.rs → usage_events table (SQLite)
   ↓ get_summary / get_timeseries / get_top_mcp / get_top_plugins (commands.rs)
 React (useUsage.ts) → Dashboard / MCP / Plugins
   ↓ (5분 주기 + 사용량 변경 이벤트(60초 throttle) + 수동 sync)

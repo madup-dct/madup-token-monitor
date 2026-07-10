@@ -11,12 +11,22 @@ use tauri::{AppHandle, Emitter};
 use crate::db;
 use crate::parser;
 
-/// Per-file state: how many bytes we have already consumed.
-type FileOffsets = Arc<Mutex<HashMap<PathBuf, u64>>>;
-/// Per-file partial-line buffer.
-type FileBuffers = Arc<Mutex<HashMap<PathBuf, String>>>;
 /// 마지막으로 프론트에 변경을 알린 시각 — emit 폭주 방지 throttle.
 type LastEmit = Arc<Mutex<Instant>>;
+
+#[derive(Clone, Default)]
+struct FileState {
+    offset: u64,
+    buffer: String,
+    parser: parser::ParseState,
+}
+
+#[derive(Clone)]
+struct WatchState {
+    files: Arc<Mutex<HashMap<PathBuf, FileState>>>,
+    last_emit: LastEmit,
+    processing: Arc<Mutex<()>>,
+}
 
 /// usage-updated emit 최소 간격 — 활발한 CLI 사용 시 초당 수십 modify 이벤트가 와도
 /// 프론트 invalidate/sync 를 이 간격 이하로 제한한다.
@@ -28,18 +38,17 @@ pub struct FileWatcher {
 
 impl FileWatcher {
     pub fn start(app: AppHandle) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let offsets: FileOffsets = Arc::new(Mutex::new(HashMap::new()));
-        let buffers: FileBuffers = Arc::new(Mutex::new(HashMap::new()));
         // 첫 emit 이 startup 직후 곧바로 나가도록 throttle 기준을 과거로 둔다.
-        let last_emit: LastEmit = Arc::new(Mutex::new(
-            Instant::now()
-                .checked_sub(EMIT_THROTTLE)
-                .unwrap_or_else(Instant::now),
-        ));
-
-        let offsets_c = Arc::clone(&offsets);
-        let buffers_c = Arc::clone(&buffers);
-        let last_emit_c = Arc::clone(&last_emit);
+        let state = WatchState {
+            files: Arc::new(Mutex::new(HashMap::new())),
+            last_emit: Arc::new(Mutex::new(
+                Instant::now()
+                    .checked_sub(EMIT_THROTTLE)
+                    .unwrap_or_else(Instant::now),
+            )),
+            processing: Arc::new(Mutex::new(())),
+        };
+        let state_c = state.clone();
         let app_c = app.clone();
 
         let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
@@ -48,7 +57,7 @@ impl FileWatcher {
                 EventKind::Create(_) | EventKind::Modify(_) => {
                     for path in &event.paths {
                         if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                            process_file(path, &offsets_c, &buffers_c, &app_c, &last_emit_c);
+                            process_file(path, &state_c, &app_c);
                         }
                     }
                 }
@@ -60,7 +69,7 @@ impl FileWatcher {
             if dir.exists() {
                 watcher.watch(&dir, RecursiveMode::Recursive)?;
                 // Process existing files on startup
-                process_existing_files(&dir, &offsets, &buffers, &app, &last_emit);
+                process_existing_files(&dir, &state, &app);
             }
         }
 
@@ -109,16 +118,12 @@ fn home_dir() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn process_existing_files(
-    dir: &Path,
-    offsets: &FileOffsets,
-    buffers: &FileBuffers,
-    app: &AppHandle,
-    last_emit: &LastEmit,
-) {
-    let Ok(entries) = walkdir_jsonl(dir) else { return };
+fn process_existing_files(dir: &Path, state: &WatchState, app: &AppHandle) {
+    let Ok(entries) = walkdir_jsonl(dir) else {
+        return;
+    };
     for path in entries {
-        process_file(&path, offsets, buffers, app, last_emit);
+        process_file(&path, state, app);
     }
 }
 
@@ -139,64 +144,81 @@ fn walkdir_jsonl(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     Ok(results)
 }
 
-fn process_file(
-    path: &Path,
-    offsets: &FileOffsets,
-    buffers: &FileBuffers,
-    app: &AppHandle,
-    last_emit: &LastEmit,
-) {
-    let Ok(mut file) = fs::File::open(path) else { return };
-    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
-
-    let offset = {
-        let mut map = offsets.lock().unwrap();
-        *map.entry(path.to_path_buf()).or_insert(0)
+fn process_file(path: &Path, state: &WatchState, app: &AppHandle) {
+    let _processing = state.processing.lock().unwrap();
+    let Ok(mut file) = fs::File::open(path) else {
+        return;
+    };
+    let Ok(file_len) = file.metadata().map(|m| m.len()) else {
+        return;
     };
 
-    if file_len <= offset {
+    let mut file_state = {
+        let map = state.files.lock().unwrap();
+        map.get(path).cloned().unwrap_or_default()
+    };
+
+    file_state = reset_if_truncated(file_len, file_state);
+    if file_len == file_state.offset {
         return; // no new bytes
     }
 
-    file.seek(SeekFrom::Start(offset)).ok();
+    if file.seek(SeekFrom::Start(file_state.offset)).is_err() {
+        return;
+    }
     let mut new_bytes = Vec::new();
-    file.read_to_end(&mut new_bytes).ok();
+    if file.read_to_end(&mut new_bytes).is_err() {
+        return;
+    }
     let new_text = String::from_utf8_lossy(&new_bytes).into_owned();
 
     // Prepend any leftover from previous read
-    let prev_buf = {
-        let mut map = buffers.lock().unwrap();
-        map.remove(path).unwrap_or_default()
-    };
-    let full_text = prev_buf + &new_text;
+    let full_text = file_state.buffer + &new_text;
 
     let source = detect_source(path);
     let project = extract_project(path);
     let session_id = extract_session_id(path);
 
-    let (events, calls, leftover) =
-        parser::parse_jsonl(&source, &full_text, project.as_deref(), session_id.as_deref());
+    let (events, calls, leftover) = parser::parse_jsonl_chunk(
+        parser::JsonlChunk {
+            source: &source,
+            text: &full_text,
+            project: project.as_deref(),
+            session_id: session_id.as_deref(),
+        },
+        &mut file_state.parser,
+    );
 
     // Persist to SQLite
-    if let Ok(conn) = db::open() {
-        persist(&conn, &events, &calls);
+    if !events.is_empty() || !calls.is_empty() {
+        let Ok(conn) = db::open() else {
+            eprintln!("[watcher] database open failed; leaving file offset for retry");
+            return;
+        };
+        if let Err(error) = persist(&conn, &events, &calls) {
+            eprintln!("[watcher] usage persistence failed; leaving file offset for retry: {error}");
+            return;
+        }
     }
 
     // 새 사용량이 실제로 들어왔을 때만 프론트/트레이에 알림 (throttle 내장).
     if !events.is_empty() || !calls.is_empty() {
-        notify_change(app, last_emit);
+        notify_change(app, &state.last_emit);
     }
 
     // Update state
-    {
-        let mut map = offsets.lock().unwrap();
-        map.insert(path.to_path_buf(), offset + new_bytes.len() as u64);
-    }
-    {
-        let mut map = buffers.lock().unwrap();
-        if !leftover.is_empty() {
-            map.insert(path.to_path_buf(), leftover);
-        }
+    file_state.offset += new_bytes.len() as u64;
+    file_state.buffer = leftover;
+    let mut files = state.files.lock().unwrap();
+    files.insert(path.to_path_buf(), file_state);
+}
+
+fn reset_if_truncated(file_len: u64, file_state: FileState) -> FileState {
+    if file_len < file_state.offset {
+        // Truncate/recreate: the old byte offset and parser context no longer apply.
+        FileState::default()
+    } else {
+        file_state
     }
 }
 
@@ -204,13 +226,14 @@ fn persist(
     conn: &Connection,
     events: &[crate::models::UsageEvent],
     calls: &[crate::models::ToolCall],
-) {
+) -> rusqlite::Result<()> {
     for e in events {
-        db::insert_usage_event(conn, e).ok();
+        db::insert_usage_event(conn, e)?;
     }
     for c in calls {
-        db::insert_tool_call(conn, c).ok();
+        db::insert_tool_call(conn, c)?;
     }
+    Ok(())
 }
 
 fn detect_source(path: &Path) -> String {
@@ -231,10 +254,31 @@ fn extract_project(path: &Path) -> Option<String> {
     let home = home_dir();
     let base = home.join(".claude").join("projects");
     let rel = path.strip_prefix(&base).ok()?;
-    rel.components().next().map(|c| c.as_os_str().to_string_lossy().into_owned())
+    rel.components()
+        .next()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
 }
 
 /// Uses the file stem as session_id
 fn extract_session_id(path: &Path) -> Option<String> {
     path.file_stem().map(|s| s.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{reset_if_truncated, FileState};
+
+    #[test]
+    fn truncated_file_resets_offset_and_parser_state() {
+        let state = FileState {
+            offset: 100,
+            buffer: "partial".to_owned(),
+            parser: crate::parser::ParseState::default(),
+        };
+
+        let reset = reset_if_truncated(10, state);
+
+        assert_eq!(reset.offset, 0);
+        assert!(reset.buffer.is_empty());
+    }
 }

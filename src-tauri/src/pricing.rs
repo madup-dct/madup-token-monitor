@@ -70,8 +70,10 @@ pub fn calc_cost_usd(
         let output_cost = (output_tokens as f64 / 1_000_000.0) * p.output_usd_per_mtok;
         // Anthropic 공식: cache_read = input * 0.1, cache_write_5m = input * 1.25, cache_write_1h = input * 2.0
         let cache_read_cost = (cache_read as f64 / 1_000_000.0) * p.input_usd_per_mtok * 0.1;
-        let cache_write_5m_cost = (cache_write_5m as f64 / 1_000_000.0) * p.input_usd_per_mtok * 1.25;
-        let cache_write_1h_cost = (cache_write_1h as f64 / 1_000_000.0) * p.input_usd_per_mtok * 2.0;
+        let cache_write_5m_cost =
+            (cache_write_5m as f64 / 1_000_000.0) * p.input_usd_per_mtok * 1.25;
+        let cache_write_1h_cost =
+            (cache_write_1h as f64 / 1_000_000.0) * p.input_usd_per_mtok * 2.0;
         input_cost + output_cost + cache_read_cost + cache_write_5m_cost + cache_write_1h_cost
     } else {
         0.0
@@ -116,7 +118,10 @@ pub fn usd_to_krw_rate() -> f64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or(Duration::from_secs(0))
         .as_secs();
-    let cache = FxCache { rate, fetched_at: now };
+    let cache = FxCache {
+        rate,
+        fetched_at: now,
+    };
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
@@ -157,9 +162,33 @@ mod tests {
     }
 
     #[test]
+    fn test_calc_cost_gpt_5_6_tiers() {
+        let sol = calc_cost_usd("gpt-5.6-sol", 1_000_000, 1_000_000, 0, 0, 0);
+        let terra = calc_cost_usd("gpt-5.6-terra", 1_000_000, 1_000_000, 0, 0, 0);
+        let luna = calc_cost_usd("gpt-5.6-luna", 1_000_000, 1_000_000, 0, 0, 0);
+
+        assert!((sol - 35.0).abs() < 0.001, "sol cost={sol}");
+        assert!((terra - 17.5).abs() < 0.001, "terra cost={terra}");
+        assert!((luna - 7.0).abs() < 0.001, "luna cost={luna}");
+    }
+
+    #[test]
+    fn test_calc_cost_gpt_5_6_cache_read_discount() {
+        let cost = calc_cost_usd("gpt-5.6-sol", 0, 0, 1_000_000, 0, 0);
+        assert!((cost - 0.5).abs() < 0.001, "cost={cost}");
+    }
+
+    #[test]
     fn test_calc_cost_cache() {
         // sonnet input=$3 → cache_read=$0.3, cache_write_5m=$3.75, cache_write_1h=$6.0
-        let cost = calc_cost_usd("claude-3-5-sonnet-20241022", 0, 0, 1_000_000, 1_000_000, 1_000_000);
+        let cost = calc_cost_usd(
+            "claude-3-5-sonnet-20241022",
+            0,
+            0,
+            1_000_000,
+            1_000_000,
+            1_000_000,
+        );
         let expected = 0.3 + 3.75 + 6.0;
         assert!((cost - expected).abs() < 0.001, "cost={cost}");
     }
@@ -170,10 +199,16 @@ mod tests {
     fn test_calc_cost_opus_4_8_not_overcharged() {
         // input 1M → $5 (NOT $15 from the legacy claude-opus-4 fallback)
         let bare = calc_cost_usd("claude-opus-4-8", 1_000_000, 0, 0, 0, 0);
-        assert!((bare - 5.0).abs() < 0.001, "opus-4-8 bare cost={bare} (expected 5.0, not 15.0)");
+        assert!(
+            (bare - 5.0).abs() < 0.001,
+            "opus-4-8 bare cost={bare} (expected 5.0, not 15.0)"
+        );
         // dated 변형도 starts_with 로 4-8 키(가장 긴 매칭)에 잡혀야 함
         let dated = calc_cost_usd("claude-opus-4-8-20260515", 1_000_000, 1_000_000, 0, 0, 0);
-        assert!((dated - 30.0).abs() < 0.001, "opus-4-8 dated cost={dated} (expected 5+25=30, not 15+75=90)");
+        assert!(
+            (dated - 30.0).abs() < 0.001,
+            "opus-4-8 dated cost={dated} (expected 5+25=30, not 15+75=90)"
+        );
     }
 
     // 회귀: Fable 5 는 $10/$50. 단가표에 키가 없으면 어떤 fallback 에도 안 잡혀
@@ -181,20 +216,32 @@ mod tests {
     #[test]
     fn test_calc_cost_fable_5_not_zero() {
         let bare = calc_cost_usd("claude-fable-5", 1_000_000, 1_000_000, 0, 0, 0);
-        assert!((bare - 60.0).abs() < 0.001, "fable-5 cost={bare} (expected 10+50=60, not 0)");
+        assert!(
+            (bare - 60.0).abs() < 0.001,
+            "fable-5 cost={bare} (expected 10+50=60, not 0)"
+        );
         // [1m] 컨텍스트 변형도 prefix 매칭으로 잡혀야 함
         let variant = calc_cost_usd("claude-fable-5[1m]", 1_000_000, 0, 0, 0, 0);
-        assert!((variant - 10.0).abs() < 0.001, "fable-5[1m] cost={variant} (expected 10.0)");
+        assert!(
+            (variant - 10.0).abs() < 0.001,
+            "fable-5[1m] cost={variant} (expected 10.0)"
+        );
         // 미래 fable-N 도 generic claude-fable 로 $10 fallback
         let future = calc_cost_usd("claude-fable-6", 1_000_000, 0, 0, 0, 0);
-        assert!((future - 10.0).abs() < 0.001, "fable-6 cost={future} (expected 10.0)");
+        assert!(
+            (future - 10.0).abs() < 0.001,
+            "fable-6 cost={future} (expected 10.0)"
+        );
     }
 
     // 레거시 Opus 4.1 은 여전히 $15/$75 (명시 키 보존 확인)
     #[test]
     fn test_calc_cost_opus_4_1_legacy_price() {
         let cost = calc_cost_usd("claude-opus-4-1", 1_000_000, 0, 0, 0, 0);
-        assert!((cost - 15.0).abs() < 0.001, "opus-4-1 cost={cost} (expected 15.0)");
+        assert!(
+            (cost - 15.0).abs() < 0.001,
+            "opus-4-1 cost={cost} (expected 15.0)"
+        );
     }
 
     // 재발 방지: generic "claude-opus-4" 기본값을 $5 로 내려, 단가표에 없는 미래 opus-4-N
@@ -203,11 +250,20 @@ mod tests {
     fn test_calc_cost_opus_generic_default_and_legacy_pins() {
         // 미등록 미래 모델 → generic claude-opus-4 = $5 (옛 $15 아님)
         let future = calc_cost_usd("claude-opus-4-9", 1_000_000, 0, 0, 0, 0);
-        assert!((future - 5.0).abs() < 0.001, "opus-4-9 cost={future} (expected 5.0, not 15.0)");
+        assert!(
+            (future - 5.0).abs() < 0.001,
+            "opus-4-9 cost={future} (expected 5.0, not 15.0)"
+        );
         // 레거시 Opus 4.0 (dated id) 는 명시 핀으로 $15 유지
         let legacy = calc_cost_usd("claude-opus-4-20250514", 1_000_000, 0, 0, 0, 0);
-        assert!((legacy - 15.0).abs() < 0.001, "opus-4.0 dated cost={legacy} (expected 15.0)");
+        assert!(
+            (legacy - 15.0).abs() < 0.001,
+            "opus-4.0 dated cost={legacy} (expected 15.0)"
+        );
         let legacy0 = calc_cost_usd("claude-opus-4-0", 1_000_000, 0, 0, 0, 0);
-        assert!((legacy0 - 15.0).abs() < 0.001, "opus-4-0 cost={legacy0} (expected 15.0)");
+        assert!(
+            (legacy0 - 15.0).abs() < 0.001,
+            "opus-4-0 cost={legacy0} (expected 15.0)"
+        );
     }
 }
