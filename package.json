@@ -18,7 +18,8 @@
     "tauri": "tauri",
     "lint": "eslint src",
     "format": "prettier --write src",
-    "test": "vitest run"
+    "test": "vitest run",
+    "doctor": "pnpm exec react-doctor --no-telemetry --scope changed"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.2.8",
@@ -55,6 +56,9 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "prettier": "^3.8.3",
+    "react-doctor": "^0.7.6",
+    "react-grab": "^0.1.48",
+    "react-scan": "^0.5.7",
     "tailwindcss": "^4.2.4",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",
