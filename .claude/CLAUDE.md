@@ -49,8 +49,8 @@ madup_token_monitoring/
 │   │   ├── ui/             # 디자인시스템 1차 (Select, card, tabs)
 │   │   ├── charts/         # recharts 래퍼
 │   │   └── chat/           # 채팅 메시지 + 입력
-│   ├── hooks/              # useUsage (timeseries/summary/heatmap), useAuthUser, useMessages
-│   ├── lib/                # supabase 클라이언트, auth (deep-link callback), AuthGuard, format
+│   ├── hooks/              # useUsage, useDashboardUsage, useRateLimits, useAuthUser, useMessages
+│   ├── lib/                # supabase, auth, AuthGuard, format, usage-sources
 │   ├── i18n/               # ko.json + index.ts
 │   └── types/              # models.ts (Range, Point, Summary, Profile 등)
 ├── src-tauri/
@@ -61,7 +61,9 @@ madup_token_monitoring/
 │   └── src/
 │       ├── lib.rs          # Builder + plugin 등록 + tray setup
 │       ├── tray.rs         # 메뉴바 아이콘 + popover 위치 + spawn_title_updater
-│       ├── commands.rs     # tauri::command (get_summary, get_timeseries, get_today_cost_usd, ...)
+│       ├── commands.rs     # tauri::command (get_timeseries, get_heatmap, get_today_cost_usd, ...)
+│       ├── summary.rs      # source별 get_summary 집계
+│       ├── codex_limits.rs # Codex rollout의 최신 rate_limits 집계
 │       ├── db.rs           # SQLite 스키마 + range_bounds("1d"|"7d"|"30d"|"365d"|"all")
 │       ├── parser.rs       # JSONL 파서 façade 및 공통 chunk 처리
 │       ├── parser/         # claude.rs, codex.rs, opencode.rs provider 파서
@@ -237,7 +239,7 @@ bash scripts/release.sh
 ~/.claude/projects/**/*.jsonl, ~/.codex/sessions/**/*.jsonl, ~/.gemini/**
   ↓ (watcher.rs: notify crate)
 parser.rs → parser/{claude,codex,opencode}.rs → usage_events table (SQLite)
-  ↓ get_summary / get_timeseries / get_top_mcp / get_top_plugins (commands.rs)
+  ↓ get_summary (summary.rs) / get_timeseries / get_heatmap / get_top_* (commands.rs)
 React (useUsage.ts) → Dashboard / MCP / Plugins
   ↓ (5분 주기 + 사용량 변경 이벤트(60초 throttle) + 수동 sync)
 aggregator.rs → Supabase usage_aggregates / mcp_aggregates / plugin_aggregates
@@ -283,11 +285,12 @@ rowid 재사용으로 워터마크가 신규 이벤트를 영구 누락시킨다
   | 팀 대시보드 (KPI + 멤버 리더보드 + 팀 MCP/플러그인 carousel) | `@/components/team/TeamDashboardPanel` | 팀 관리 드릴다운 (TeamManageList) |
   | 전사 유저 테이블 (권한·팀·토큰 정렬/필터/검색, 행→상세) | `@/components/team/UserFilterTable` | AdminAnalytics (사용량 분석) |
   | 사용자 리스트 모달 (엔터티→사용자 + 사용량, 행→상세) | `@/components/team/UserListModal` | AdminAnalytics (사용량 분석) |
-  | Carousel 3D 회전 primitive (저수준) | `@/components/ui/PrismCarousel` | CarouselCard 내부, CompanyDashboard·MyTeamPanel(리더보드 carousel) |
+  | Carousel prism/slide primitive (저수준) | `@/components/ui/PrismCarousel` | CarouselCard 내부, UsageSourceCarousel, CompanyDashboard·MyTeamPanel |
   | "오늘" 카드 하단 stat (라벨+큰 숫자+보조) | `@/components/dashboard/TodayStat` | Dashboard, UserDashboard |
   | 미니 통계 카드 (eyebrow+큰 숫자+suffix+foot, colSpan) | `@/components/dashboard/MiniStatCard` | Dashboard, UserDashboard |
   | 활성 카운트 dot grid (KPI rightAccessory) | `@/components/ui/DotGrid` | CompanyDashboard, MyTeamPanel |
-  | 기간 캐러셀 컨트롤 (이전/점/다음 + 자동 토글) | `@/components/ui/CarouselControls` | CompanyDashboard, MyTeamPanel (전체 슬라이드 헤더) |
+  | 캐러셀 컨트롤 (이전/점/다음 + 선택적 자동 토글) | `@/components/ui/CarouselControls` | UsageSourceCarousel, CompanyDashboard, MyTeamPanel |
+  | 토큰 소스·계정 한도 캐러셀 | `@/components/dashboard/UsageSourceCarousel` | Dashboard (통합/Claude/Codex 전역 선택) |
   | Dropdown (single-select) | `@/components/ui/Select` | **모든 페이지** — native `<select>` 금지 |
 
   - **granularity(시간별/일자별/주별/월별) 컨트롤 컨벤션** — ambient 대시보드 카드는
@@ -319,6 +322,9 @@ rowid 재사용으로 워터마크가 신규 이벤트를 영구 누락시킨다
 
 자주 참조:
 - `src/pages/Dashboard.tsx` — 가장 큰 페이지. granularity / period / metric / view 의 4축 제어.
+- `src/hooks/useDashboardUsage.ts` — Dashboard의 통합/Claude/Codex source 라우팅.
+- `src-tauri/src/summary.rs` — 로컬 SQLite summary를 source별로 동일 조건 집계.
+- `src-tauri/src/codex_limits.rs` — Codex rollout에서 계정·모델별 최신 rate limit 추출.
 - `src/components/ui/Select.tsx` — 디자인시스템 dropdown (외부 클릭 닫힘 + Esc + 화살표 회전).
 - `src-tauri/src/db.rs` — `range_bounds(range)` 가 시간 경계 계산. 새 range 옵션은 여기에 등록.
 

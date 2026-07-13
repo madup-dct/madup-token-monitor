@@ -1,9 +1,4 @@
-import {
-  useCallback,
-  useState,
-  type Dispatch,
-  type SetStateAction,
-} from "react";
+import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 
 /// useState 드롭인 교체 — 값을 localStorage 에 영속한다.
 /// 컴포넌트가 언마운트(라우트 이동)돼도, 앱을 재시작해도 마지막 선택값이 유지된다.
@@ -11,33 +6,28 @@ import {
 export function usePersistentState<T>(
   key: string,
   initial: T,
+  isValid?: (value: unknown) => value is T
 ): [T, Dispatch<SetStateAction<T>>] {
   const [value, setValue] = useState<T>(() => {
     try {
       const raw = localStorage.getItem(key);
-      return raw != null ? (JSON.parse(raw) as T) : initial;
-    } catch {
-      return initial;
+      if (raw === null) return initial;
+      const parsed: unknown = JSON.parse(raw);
+      return !isValid || isValid(parsed) ? (parsed as T) : initial;
+    } catch (error) {
+      if (error instanceof DOMException || error instanceof SyntaxError) return initial;
+      throw error;
     }
   });
 
-  const set = useCallback<Dispatch<SetStateAction<T>>>(
-    (action) => {
-      setValue((prev) => {
-        const next =
-          typeof action === "function"
-            ? (action as (p: T) => T)(prev)
-            : action;
-        try {
-          localStorage.setItem(key, JSON.stringify(next));
-        } catch {
-          /* localStorage 불가 환경 — 메모리 state 로만 동작 */
-        }
-        return next;
-      });
-    },
-    [key],
-  );
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (error) {
+      if (error instanceof DOMException || error instanceof TypeError) return;
+      throw error;
+    }
+  }, [key, value]);
 
-  return [value, set];
+  return [value, setValue];
 }

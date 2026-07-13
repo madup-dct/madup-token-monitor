@@ -2,41 +2,39 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  useSummary,
-  useTimeseries,
-  useMyHourly,
   useHeatmap,
   useOAuthUsage,
+  useCodexRateLimits,
   useUserMcp,
   useUserPlugins,
   useUserTools,
   useMyDeviceCount,
   refreshOAuthUsage,
 } from "@/hooks/useUsage";
+import { useDashboardUsage } from "@/hooks/useDashboardUsage";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { usePersistentState } from "@/lib/usePersistentState";
 import { PeriodChartCard } from "@/components/dashboard/PeriodChartCard";
+import { UsageSourceCarousel } from "@/components/dashboard/UsageSourceCarousel";
 import { CarouselCard } from "@/components/dashboard/CarouselCard";
 import { TodayStat } from "@/components/dashboard/TodayStat";
 import { MiniStatCard } from "@/components/dashboard/MiniStatCard";
 import { HeatMap } from "@/components/HeatMap";
 import { RankBarList } from "@/components/ui/RankBarList";
 import { MiniBarList } from "@/components/ui/MiniBarList";
-import { KpiCard } from "@/components/ui/KpiCard";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { Select } from "@/components/ui/Select";
 import { CarouselControls } from "@/components/ui/CarouselControls";
-import { QuotaSegBar, quotaSignalClass } from "@/components/ui/QuotaSegBar";
-import {
-  formatTokensCompact,
-  formatUSD,
-  formatKRW,
-  formatPercent,
-  formatRelativeTime,
-} from "@/lib/format";
-import { pctDiff, priorDaysAverage, avgTokensPerActiveDay, projectedMinutesToLimit } from "@/lib/usage-math";
+import { formatTokensCompact, formatUSD, formatKRW, formatPercent } from "@/lib/format";
+import { pctDiff, priorDaysAverage, avgTokensPerActiveDay } from "@/lib/usage-math";
 import { prettyPluginId, prettyToolName } from "@/lib/labels";
-import type { Range, Point } from "@/types/models";
+import {
+  isUsageScope,
+  sourcesForScope,
+  USAGE_SCOPE_OPTIONS,
+  type UsageScope,
+} from "@/lib/usage-sources";
+import type { Range, Point, Summary } from "@/types/models";
 
 const RANGES: { value: Range; label: string }[] = [
   { value: "7d", label: "dashboard.period.week" },
@@ -58,6 +56,30 @@ const MODEL_RANGES: { value: Range; label: string }[] = [
   { value: "7d", label: "7일" },
   { value: "30d", label: "30일" },
 ];
+
+function summaryTokenTotal(summary: Summary): number {
+  return (
+    summary.total_input_tokens +
+    summary.total_output_tokens +
+    summary.total_cache_read +
+    summary.total_cache_write
+  );
+}
+
+function pointTotals(points: readonly Point[]): { tokens: number; cost: number } {
+  return points.reduce(
+    (totals, point) => ({
+      tokens:
+        totals.tokens +
+        point.input_tokens +
+        point.output_tokens +
+        (point.cache_read ?? 0) +
+        (point.cache_write ?? 0),
+      cost: totals.cost + point.cost_usd,
+    }),
+    { tokens: 0, cost: 0 }
+  );
+}
 
 function localDateKey(ts: number): string {
   const d = new Date(ts);
@@ -125,8 +147,8 @@ function aggregateByPeriod(points: Point[], granularity: Granularity): AggRow[] 
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-function todayLabel(): string {
-  const d = new Date();
+function todayLabel(nowMs: number): string {
+  const d = new Date(nowMs);
   const days = ["일", "월", "화", "수", "목", "금", "토"];
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} (${days[d.getDay()]})`;
 }
@@ -194,8 +216,7 @@ function fillWeeklyGaps(rows: AggRow[], monthKeyStr: string): AggRow[] {
 function fillMonthlyGaps(rows: AggRow[], year: string): AggRow[] {
   if (!year) return rows;
   const now = new Date();
-  const maxMonth =
-    Number(year) === now.getFullYear() ? now.getMonth() + 1 : 12;
+  const maxMonth = Number(year) === now.getFullYear() ? now.getMonth() + 1 : 12;
   const keys: string[] = [];
   for (let mo = 1; mo <= maxMonth; mo++) {
     keys.push(`${year}-${String(mo).padStart(2, "0")}`);
@@ -208,28 +229,45 @@ export function Dashboard() {
   const { t } = useTranslation();
   const qc = useQueryClient();
   // 뷰 토글 — 메뉴 이동/재시작 후에도 마지막 선택값 유지 (usePersistentState).
-  const [dailyRange, setDailyRange] = usePersistentState<Range>("madup-token-monitor:dash:dailyRange", "7d");
-  const [dailyGranularity, setDailyGranularity] = usePersistentState<Granularity>("madup-token-monitor:dash:dailyGranularity", "daily");
+  const [dailyRange, setDailyRange] = usePersistentState<Range>(
+    "madup-token-monitor:dash:dailyRange",
+    "7d"
+  );
+  const [dailyGranularity, setDailyGranularity] = usePersistentState<Granularity>(
+    "madup-token-monitor:dash:dailyGranularity",
+    "daily"
+  );
   const [granularityAuto, setGranularityAuto] = usePersistentState(
     "madup-token-monitor:view:dash:granularityAuto",
-    true,
+    true
   );
   // 모델별 토큰 카드 자체 캐러셀 (오늘/7일/30일) — 수동 전환 전용 (자동 회전 없음).
   const [modelRange, setModelRange] = usePersistentState<Range>(
     "madup-token-monitor:dash:modelRange",
-    "7d",
+    "7d"
   );
   const [selectedMonth, setSelectedMonth] = useState<string>("");
   const [selectedYear, setSelectedYear] = useState<string>("");
-  const [dailyMetric, setDailyMetric] = usePersistentState<"tokens" | "cost">("madup-token-monitor:dash:dailyMetric", "tokens");
-  const [dailyView, setDailyView] = usePersistentState<"chart" | "list">("madup-token-monitor:dash:dailyView", "chart");
+  const [dailyMetric, setDailyMetric] = usePersistentState<"tokens" | "cost">(
+    "madup-token-monitor:dash:dailyMetric",
+    "tokens"
+  );
+  const [dailyView, setDailyView] = usePersistentState<"chart" | "list">(
+    "madup-token-monitor:dash:dailyView",
+    "chart"
+  );
+  const [usageScope, setUsageScope] = usePersistentState<UsageScope>(
+    "madup-token-monitor:view:dash:usageSource",
+    "combined",
+    isUsageScope
+  );
   const [refreshing, setRefreshing] = useState(false);
   const [lastSync, setLastSync] = useState<Date>(() => new Date());
-  const [, setTick] = useState(0);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   // 1초마다 lastSync 상대시간 갱신.
   useEffect(() => {
-    const id = setInterval(() => setTick((n) => n + 1), 30_000);
+    const id = setInterval(() => setNowMs(Date.now()), 30_000);
     return () => clearInterval(id);
   }, []);
 
@@ -249,26 +287,28 @@ export function Dashboard() {
   }, [granularityAuto, carouselHovered, dailyGranularity, setDailyGranularity]);
 
   const { user } = useAuthUser();
+  const {
+    summary30,
+    summary7,
+    summary1,
+    tsDaily,
+    tsTodayDb,
+    tsToday,
+    tsMonth,
+    tsAll,
+    combinedTsTodayDb,
+    combinedTs7,
+    combinedTsMonth,
+  } = useDashboardUsage(usageScope, dailyRange, dailyGranularity === "hourly" || granularityAuto);
   // DB 미보유 차원 — 로컬 유지(세션수/모델/소스비용/히트맵).
-  const { data: summary30 } = useSummary("30d");
-  const { data: summary7 } = useSummary("7d");
-  const { data: summary1 } = useSummary("1d");
-  const { data: tsDaily } = useTimeseries(dailyRange);
-  // 오늘 KPI 토큰/비용을 DB 기준으로 계산 (다기기 합산). usage_aggregates 본인 전 기기.
-  const { data: tsTodayDb } = useTimeseries("1d");
-  // 시간별(hourly) 차트 — DB(usage_hourly) 본인 전 기기. 시간별 뷰 또는
-  // 자동 회전 중일 때 fetch (회전으로 시간별 면 진입 시 빈 차트 방지).
-  const { data: tsToday } = useMyHourly(dailyGranularity === "hourly" || granularityAuto);
-  const { data: tsMonth } = useTimeseries("30d");
-  const { data: tsAll } = useTimeseries("all");
-  // DB 미보유 차원 — 로컬 유지(세션수/모델/소스비용/히트맵).
-  const { data: heatmap } = useHeatmap(56);
+  const { data: heatmap } = useHeatmap(56, sourcesForScope(usageScope));
   // MCP / 플러그인 / 도구 — DB(security definer RPC, 본인 uid). 최근 7일.
   const { data: topMcp } = useUserMcp(user?.id ?? null, 7);
   const { data: topPlugins } = useUserPlugins(user?.id ?? null, 7);
   const { data: topTools } = useUserTools(user?.id ?? null, 7);
   const { data: deviceCount } = useMyDeviceCount(30);
   const { data: oauthResp } = useOAuthUsage();
+  const { data: codexLimits } = useCodexRateLimits();
   const oauthUsage = oauthResp?.data ?? null;
   const oauthError = oauthResp?.error ?? null;
 
@@ -278,6 +318,8 @@ export function Dashboard() {
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["summary"] }),
         qc.invalidateQueries({ queryKey: ["timeseries"] }),
+        qc.invalidateQueries({ queryKey: ["my_hourly"] }),
+        qc.invalidateQueries({ queryKey: ["codexRateLimits"] }),
         qc.invalidateQueries({ queryKey: ["heatmap"] }),
         refreshOAuthUsage().then((r) => qc.setQueryData(["oauthUsage"], r)),
       ]);
@@ -297,23 +339,12 @@ export function Dashboard() {
     for (const p of tsAll ?? []) set.add(yearKey(p.ts));
     return Array.from(set).sort().reverse();
   }, [tsAll]);
-
-  useEffect(() => {
-    if (
-      dailyGranularity === "weekly" &&
-      availableMonths.length > 0 &&
-      !availableMonths.includes(selectedMonth)
-    ) {
-      setSelectedMonth(availableMonths[0]);
-    }
-    if (
-      dailyGranularity === "monthly" &&
-      availableYears.length > 0 &&
-      !availableYears.includes(selectedYear)
-    ) {
-      setSelectedYear(availableYears[0]);
-    }
-  }, [dailyGranularity, availableMonths, availableYears, selectedMonth, selectedYear]);
+  const effectiveMonth = availableMonths.includes(selectedMonth)
+    ? selectedMonth
+    : (availableMonths[0] ?? "");
+  const effectiveYear = availableYears.includes(selectedYear)
+    ? selectedYear
+    : (availableYears[0] ?? "");
 
   const dailyAggregated = useMemo<AggRow[]>(() => {
     if (dailyGranularity === "hourly") {
@@ -325,13 +356,13 @@ export function Dashboard() {
     if (dailyGranularity === "weekly") {
       const all = aggregateByPeriod(tsAll ?? [], "weekly");
       return all.filter(
-        (w) => monthKey(new Date(w.date + "T00:00:00").getTime()) === selectedMonth,
+        (w) => monthKey(new Date(w.date + "T00:00:00").getTime()) === effectiveMonth
       );
     }
     return aggregateByPeriod(tsAll ?? [], "monthly").filter((m) =>
-      m.date.startsWith(selectedYear + "-"),
+      m.date.startsWith(effectiveYear + "-")
     );
-  }, [dailyGranularity, tsDaily, tsToday, tsAll, selectedMonth, selectedYear]);
+  }, [dailyGranularity, tsDaily, tsToday, tsAll, effectiveMonth, effectiveYear]);
 
   const dailyLimit = DAILY_CARD_LIMIT[dailyRange] ?? 30;
   // 빈 시간/날짜/주/월을 0 으로 채워 차트·리스트에서 누락 없이 연속 표시.
@@ -343,14 +374,22 @@ export function Dashboard() {
       return fillDailyGaps(dailyAggregated, dailyLimit);
     }
     if (dailyGranularity === "weekly") {
-      return fillWeeklyGaps(dailyAggregated, selectedMonth);
+      return fillWeeklyGaps(dailyAggregated, effectiveMonth);
     }
-    return fillMonthlyGaps(dailyAggregated, selectedYear);
-  }, [dailyGranularity, dailyAggregated, dailyLimit, selectedMonth, selectedYear]);
+    return fillMonthlyGaps(dailyAggregated, effectiveYear);
+  }, [dailyGranularity, dailyAggregated, dailyLimit, effectiveMonth, effectiveYear]);
 
   // 7d 합산 / 월간 합산.
-  const thisWeek = useMemo(() => calcRange(tsMonth ?? [], "this-week"), [tsMonth]);
-  const monthToDate = useMemo(() => calcRange(tsMonth ?? [], "this-month"), [tsMonth]);
+  const thisWeek = useMemo(() => calcRange(tsMonth ?? [], "this-week", nowMs), [tsMonth, nowMs]);
+  const monthToDate = useMemo(
+    () => calcRange(tsMonth ?? [], "this-month", nowMs),
+    [tsMonth, nowMs]
+  );
+  const combinedMonthToDate = useMemo(
+    () => calcRange(combinedTsMonth ?? [], "this-month", nowMs),
+    [combinedTsMonth, nowMs]
+  );
+  const combinedSevenDay = useMemo(() => pointTotals(combinedTs7 ?? []), [combinedTs7]);
 
   // 7일 sparkline (오늘 포함 마지막 7일).
   const sparkValues = useMemo(() => {
@@ -366,18 +405,34 @@ export function Dashboard() {
     );
   }
 
-  const sumIO = (s: typeof summary1) =>
-    s.total_input_tokens + s.total_output_tokens + s.total_cache_read + s.total_cache_write;
-
   // 오늘 토큰/비용/캐시 — DB(usage_aggregates 본인 전 기기) 기준. 다기기 합산.
-  const todayKey = localDateKey(Date.now());
+  const todayKey = localDateKey(nowMs);
   const todayDb = (tsTodayDb ?? []).filter((p) => localDateKey(p.ts) === todayKey);
   const todayTokens = todayDb.reduce(
     (acc, p) => acc + p.input_tokens + p.output_tokens + (p.cache_read ?? 0) + (p.cache_write ?? 0),
-    0,
+    0
   );
-  const todayCache = todayDb.reduce((acc, p) => acc + (p.cache_read ?? 0) + (p.cache_write ?? 0), 0);
+  const todayCache = todayDb.reduce(
+    (acc, p) => acc + (p.cache_read ?? 0) + (p.cache_write ?? 0),
+    0
+  );
   const todayCost = todayDb.reduce((acc, p) => acc + p.cost_usd, 0);
+  const combinedTodayDb = (combinedTsTodayDb ?? []).filter(
+    (point) => localDateKey(point.ts) === todayKey
+  );
+  const combinedTodayTokens = combinedTodayDb.reduce(
+    (accumulator, point) =>
+      accumulator +
+      point.input_tokens +
+      point.output_tokens +
+      (point.cache_read ?? 0) +
+      (point.cache_write ?? 0),
+    0
+  );
+  const combinedTodayCost = combinedTodayDb.reduce(
+    (accumulator, point) => accumulator + point.cost_usd,
+    0
+  );
   // 오늘을 제외한 직전 7일 일평균과 비교 — DB(tsMonth) 기준으로 todayTokens 와 소스 일치.
   // tsMonth 의 마지막 8일에서 오늘을 뺀 직전 7일 토큰 평균.
   const last8Daily = aggregateByPeriod(tsMonth ?? [], "daily").slice(-8);
@@ -390,52 +445,14 @@ export function Dashboard() {
   const todayMessages = summary1.message_count;
   const todaySessions = summary1.session_count;
 
-  const fiveHour = oauthUsage?.five_hour ?? null;
-  const sevenDay = oauthUsage?.seven_day ?? null;
-  const sevenDaySonnet = oauthUsage?.seven_day_sonnet ?? null;
-  const sevenDayOpus = oauthUsage?.seven_day_opus ?? null;
-  const hasRealQuota = fiveHour !== null || sevenDay !== null;
-  const sessionUsage = fiveHour
-    ? Math.min(1, fiveHour.utilization / 100)
-    : Math.min(1, todayTokens / 250_000_000);
-  const weeklyUsage = sevenDay
-    ? Math.min(1, sevenDay.utilization / 100)
-    : Math.min(1, sumIO(summary7) / 1_500_000_000);
-  const sessionResetMs = fiveHour
-    ? Math.max(0, new Date(fiveHour.resets_at).getTime() - Date.now())
-    : 1 * 3600_000 + 3 * 60_000;
-  // F1: 5h 한도 도달 예상 — OAuth util + resets_at 만으로 윈도우 평균 페이스 투영.
-  const FIVE_HOUR_MS = 5 * 3600_000;
-  const sessionElapsedMin = fiveHour
-    ? Math.max(0, (FIVE_HOUR_MS - sessionResetMs) / 60_000)
-    : 0;
-  const sessionProjMin = fiveHour
-    ? projectedMinutesToLimit(fiveHour.utilization, sessionElapsedMin)
-    : null;
-  // 리셋 전에 한도 소진이 예상될 때만 경고 (소진 예상 < 리셋까지 남은 시간).
-  const sessionLimitHint =
-    fiveHour && fiveHour.utilization >= 100
-      ? "한도 도달 — 리셋까지 대기"
-      : sessionProjMin !== null && sessionProjMin * 60_000 < sessionResetMs
-        ? `현재 페이스로 ~${formatRelativeTime(sessionProjMin * 60_000)} 후 소진`
-        : null;
-  const weeklyResetMs = sevenDay
-    ? Math.max(0, new Date(sevenDay.resets_at).getTime() - Date.now())
-    : 1 * 86_400_000 + 14 * 3600_000 + 53 * 60_000;
-  const monthlyUsage = Math.min(1, monthToDate.tokens / 15_000_000_000);
-
   // 활동일 (히트맵 56일 기준) — 히트맵 하단 stat 표시용
   const activeDays = (heatmap ?? []).filter((d) => d.count > 0).length;
   // 평균 일일 토큰 — 분자(30일 토큰)와 분모(최근 30일 활동일)를 같은 창으로 맞춤.
   // 기존 버그: 30일 토큰을 56일 활동일로 나눠 과소 계산됨.
-  const cutoff30 = (() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    d.setDate(d.getDate() - 29);
-    return localDateKey(d.getTime());
-  })();
-  const activeDays30 = (heatmap ?? []).filter((d) => d.count > 0 && d.date >= cutoff30).length;
-  const avgDailyTokens = avgTokensPerActiveDay(sumIO(summary30), activeDays30);
+  const activeDays30 = new Set((tsMonth ?? []).map((point) => localDateKey(point.ts))).size;
+  const avgDailyTokens = avgTokensPerActiveDay(summaryTokenTotal(summary30), activeDays30);
+  const usageScopeLabel =
+    USAGE_SCOPE_OPTIONS.find((option) => option.value === usageScope)?.label ?? "통합";
 
   // DB 미보유 차원 — 로컬 유지(소스비용 미니바). usage_aggregates 에 source 비용 분해 없음.
   const toolItems = summary7.by_source
@@ -445,22 +462,23 @@ export function Dashboard() {
   // 다른 카드와 동일하게 캐시 포함 — 입력+출력만 합산하면 캐시 비중이 99%라
   // 값이 며칠씩 안 변하는 것처럼 보인다 (예: opus 5M 고정 이슈).
   // <synthetic>(모델 없음, 토큰 0)·0값 모델은 자리만 차지 — 제외.
-  const modelSummary =
-    modelRange === "1d" ? summary1 : modelRange === "30d" ? summary30 : summary7;
+  const modelSummary = modelRange === "1d" ? summary1 : modelRange === "30d" ? summary30 : summary7;
   const modelItems = (modelSummary?.by_model ?? [])
-    .filter((m) => m.model !== "<synthetic>")
-    .map((m) => ({
-      label: m.model.replace("claude-", ""),
-      value: m.input_tokens + m.output_tokens + m.cache_read + m.cache_write,
-    }))
-    .filter((m) => m.value > 0)
+    .flatMap((model) => {
+      const value = model.input_tokens + model.output_tokens + model.cache_read + model.cache_write;
+      return model.model === "<synthetic>" || value <= 0
+        ? []
+        : [{ label: model.model.replace("claude-", ""), value }];
+    })
     .sort((a, b) => b.value - a.value);
 
   function copyDailyToClipboard() {
     const lines = [
-      ["Date", dailyMetric === "tokens" ? "Tokens" : "Cost (USD)"].join("\t"),
+      ["Source", "Date", dailyMetric === "tokens" ? "Tokens" : "Cost (USD)"].join("\t"),
       ...dailyRows.map((d) =>
-        [d.date, dailyMetric === "tokens" ? d.tokens : d.cost.toFixed(4)].join("\t"),
+        [usageScopeLabel, d.date, dailyMetric === "tokens" ? d.tokens : d.cost.toFixed(4)].join(
+          "\t"
+        )
       ),
     ];
     navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
@@ -468,16 +486,16 @@ export function Dashboard() {
 
   function exportCsv() {
     const lines = [
-      ["Date", "Tokens", "Cost USD"].join(","),
+      ["Source", "Date", "Tokens", "Cost USD"].join(","),
       ...dailyRows.map((d) =>
-        [d.date, String(d.tokens), d.cost.toFixed(4)].join(","),
+        [usageScopeLabel, d.date, String(d.tokens), d.cost.toFixed(4)].join(",")
       ),
     ];
     const blob = new Blob([lines.join("\n")], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `madup-token-monitor-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `madup-token-monitor-${usageScope}-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -495,11 +513,11 @@ export function Dashboard() {
             {t("nav.dashboard")}
           </h1>
           <p className="num text-[12px] text-text-tertiary mt-1 whitespace-nowrap">
-            {todayLabel()} · 마지막 동기화 {formatRelativeShort(Date.now() - lastSync.getTime())} 전
+            {todayLabel(nowMs)} · 마지막 동기화 {formatRelativeShort(nowMs - lastSync.getTime())} 전
           </p>
         </div>
         <div className="flex gap-2 items-center shrink-0">
-          <button onClick={exportCsv} className="mc-btn-outline">
+          <button type="button" onClick={exportCsv} className="mc-btn-outline">
             <svg
               width="14"
               height="14"
@@ -515,6 +533,7 @@ export function Dashboard() {
             내보내기
           </button>
           <button
+            type="button"
             onClick={handleRefresh}
             disabled={refreshing}
             className="mc-btn-primary disabled:opacity-70"
@@ -542,7 +561,7 @@ export function Dashboard() {
         {/* ============ ROW 1: Today (col-8 feature) ============ */}
         <section className="mc-card-feature col-span-8">
           <header className="flex items-center justify-between mb-3.5 gap-3 relative">
-            <span className="mc-eyebrow">오늘 · DAILY</span>
+            <span className="mc-eyebrow">오늘 · {usageScopeLabel}</span>
             <div className="flex items-center gap-2">
               {weekAvgDailyTokens > 0 && (
                 <span className={todayDeltaUp ? "mc-delta-up" : "mc-delta-down"}>
@@ -564,7 +583,7 @@ export function Dashboard() {
                 </span>
               </div>
               <p className="text-[12px] text-text-tertiary mt-2.5 leading-snug">
-                입력 + 출력 + 캐시 read/write 합산. Claude API 청구 기준.
+                입력 + 출력 + 캐시 read/write 합산 · {usageScopeLabel} 기준
               </p>
 
               <div className="mt-6 grid grid-cols-4 gap-4 pt-5 border-t border-hairline">
@@ -581,12 +600,7 @@ export function Dashboard() {
                   sub="건"
                   color="azure"
                 />
-                <TodayStat
-                  label="세션"
-                  value={String(todaySessions)}
-                  sub="개"
-                  color="violet"
-                />
+                <TodayStat label="세션" value={String(todaySessions)} sub="개" color="violet" />
                 <TodayStat
                   label="활성 기기"
                   value={String(deviceCount ?? 1)}
@@ -629,91 +643,30 @@ export function Dashboard() {
           </div>
         </section>
 
-        {/* ============ ROW 1: Quota (col-4) ============ */}
-        <section className="mc-card col-span-4">
-          <header className="flex items-center justify-between mb-3.5 gap-3 relative">
-            <span className="text-[15px] font-semibold text-text-primary tracking-[-0.005em]">
-              사용량 한도
-            </span>
-            <span
-              className="inline-flex items-center gap-1.5 h-[22px] px-2.5 rounded-full text-[11px] font-semibold whitespace-nowrap"
-              style={{
-                background: hasRealQuota ? "var(--color-azure-soft)" : "var(--color-surface-2)",
-                color: hasRealQuota ? "var(--color-azure-bright)" : "var(--color-text-tertiary)",
-              }}
-              title={oauthError ?? undefined}
-            >
-              <span
-                className="w-1.5 h-1.5 rounded-full"
-                style={{
-                  background: hasRealQuota ? "var(--color-azure)" : "var(--color-text-faint)",
-                }}
-              />
-              {hasRealQuota
-                ? `OAuth 실시간${oauthUsage?.is_stale ? " (캐시)" : ""}`
-                : oauthError
-                  ? "오류"
-                  : "추정값"}
-            </span>
-          </header>
-
-          <QuotaRow
-            name="세션"
-            sub="(5h)"
-            meta={`Resets in ${formatRelativeTime(sessionResetMs)}`}
-            value={sessionUsage}
-            hint={sessionLimitHint}
-          />
-          <QuotaRow
-            name="주간 한도"
-            meta={`Resets in ${formatRelativeTime(weeklyResetMs)}`}
-            value={weeklyUsage}
-          />
-          {sevenDaySonnet && (
-            <QuotaRow
-              name="주간 · Sonnet"
-              meta={`Resets in ${formatRelativeTime(Math.max(0, new Date(sevenDaySonnet.resets_at).getTime() - Date.now()))}`}
-              value={Math.min(1, sevenDaySonnet.utilization / 100)}
-            />
-          )}
-          {sevenDayOpus && (
-            <QuotaRow
-              name="주간 · Opus"
-              meta={`Resets in ${formatRelativeTime(Math.max(0, new Date(sevenDayOpus.resets_at).getTime() - Date.now()))}`}
-              value={Math.min(1, sevenDayOpus.utilization / 100)}
-            />
-          )}
-          <QuotaRow
-            name="월간 누적"
-            meta={`이번 달 ${new Date().getMonth() + 1}/1~`}
-            value={monthlyUsage}
-          />
-
-          <div className="mt-5 pt-3.5 border-t border-hairline flex justify-between items-center">
-            <span className="text-[11px] text-text-tertiary">
-              {formatRelativeShort(Date.now() - lastSync.getTime())} 전 동기화됨
-            </span>
-            <button
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-hairline bg-surface-2 text-text-secondary text-[11.5px] font-medium hover:text-text-primary hover:border-hairline-strong transition-colors disabled:opacity-60"
-            >
-              <svg
-                width="11"
-                height="11"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.6"
-                strokeLinecap="round"
-                className={refreshing ? "animate-spin" : undefined}
-              >
-                <path d="M2 8a6 6 0 0110.3-4.2L14 2v4h-4M14 8a6 6 0 01-10.3 4.2L2 14v-4h4" />
-              </svg>
-              새로고침
-            </button>
-          </div>
-        </section>
+        <UsageSourceCarousel
+          scope={usageScope}
+          onScopeChange={setUsageScope}
+          combinedTotals={[
+            { label: "오늘", tokens: combinedTodayTokens, cost: combinedTodayCost },
+            {
+              label: "최근 7일",
+              tokens: combinedSevenDay.tokens,
+              cost: combinedSevenDay.cost,
+            },
+            {
+              label: "이번 달",
+              tokens: combinedMonthToDate.tokens,
+              cost: combinedMonthToDate.cost,
+            },
+          ]}
+          claudeUsage={oauthUsage}
+          claudeError={oauthError}
+          codexLimits={codexLimits ?? []}
+          refreshing={refreshing}
+          lastSyncLabel={formatRelativeShort(nowMs - lastSync.getTime())}
+          nowMs={nowMs}
+          onRefresh={handleRefresh}
+        />
 
         {/* ============ ROW 2: Daily breakdown (col-8) ============ */}
         {/* display:contents — 그리드 배치는 PeriodChartCard 의 col-span 이 그대로 적용되고,
@@ -723,70 +676,71 @@ export function Dashboard() {
           onMouseEnter={() => setCarouselHovered(true)}
           onMouseLeave={() => setCarouselHovered(false)}
         >
-        <PeriodChartCard
-          leftHeader={
-            <>
-              <span className="text-[15px] font-semibold text-text-primary tracking-[-0.005em]">
-                기간별 사용량
-                {/* CarouselCard 헤더의 활성 면 제목 패턴 — 현재 granularity 라벨을 작게 표시 */}
-                <span className="text-text-tertiary font-normal text-[12px] ml-1">
-                  {GRANULARITIES.find((g) => g.value === dailyGranularity)?.label}
+          <PeriodChartCard
+            leftHeader={
+              <>
+                <span className="text-[15px] font-semibold text-text-primary tracking-[-0.005em]">
+                  기간별 사용량
+                  {/* CarouselCard 헤더의 활성 면 제목 패턴 — 현재 granularity 라벨을 작게 표시 */}
+                  <span className="text-text-tertiary font-normal text-[12px] ml-1">
+                    {usageScopeLabel} ·{" "}
+                    {GRANULARITIES.find((g) => g.value === dailyGranularity)?.label}
+                  </span>
                 </span>
-              </span>
-              <CarouselControls
-                count={GRANULARITIES.length}
-                activeIndex={Math.max(
-                  0,
-                  GRANULARITIES.findIndex((g) => g.value === dailyGranularity),
+                <CarouselControls
+                  count={GRANULARITIES.length}
+                  activeIndex={Math.max(
+                    0,
+                    GRANULARITIES.findIndex((g) => g.value === dailyGranularity)
+                  )}
+                  onIndexChange={(i) => setDailyGranularity(GRANULARITIES[i]!.value)}
+                  labels={GRANULARITIES.map((g) => g.label)}
+                  auto={granularityAuto}
+                  onAutoChange={setGranularityAuto}
+                />
+                {dailyGranularity === "hourly" ? null : dailyGranularity === "daily" ? (
+                  <Select
+                    value={dailyRange}
+                    onChange={(v) => setDailyRange(v as Range)}
+                    options={RANGES.map((r) => ({ value: r.value, label: t(r.label) }))}
+                    ariaLabel="기간 선택"
+                  />
+                ) : dailyGranularity === "weekly" ? (
+                  <Select
+                    value={effectiveMonth}
+                    onChange={setSelectedMonth}
+                    options={availableMonths.map((m) => ({ value: m, label: monthLabel(m) }))}
+                    ariaLabel="월 선택"
+                  />
+                ) : (
+                  <Select
+                    value={effectiveYear}
+                    onChange={setSelectedYear}
+                    options={availableYears.map((y) => ({ value: y, label: yearLabel(y) }))}
+                    ariaLabel="년 선택"
+                  />
                 )}
-                onIndexChange={(i) => setDailyGranularity(GRANULARITIES[i]!.value)}
-                labels={GRANULARITIES.map((g) => g.label)}
-                auto={granularityAuto}
-                onAutoChange={setGranularityAuto}
-              />
-              {dailyGranularity === "hourly" ? null : dailyGranularity === "daily" ? (
-                <Select
-                  value={dailyRange}
-                  onChange={(v) => setDailyRange(v as Range)}
-                  options={RANGES.map((r) => ({ value: r.value, label: t(r.label) }))}
-                  ariaLabel="기간 선택"
-                />
-              ) : dailyGranularity === "weekly" ? (
-                <Select
-                  value={selectedMonth}
-                  onChange={setSelectedMonth}
-                  options={availableMonths.map((m) => ({ value: m, label: monthLabel(m) }))}
-                  ariaLabel="월 선택"
-                />
-              ) : (
-                <Select
-                  value={selectedYear}
-                  onChange={setSelectedYear}
-                  options={availableYears.map((y) => ({ value: y, label: yearLabel(y) }))}
-                  ariaLabel="년 선택"
-                />
-              )}
-            </>
-          }
-          rows={dailyRows}
-          metric={dailyMetric}
-          onMetricChange={setDailyMetric}
-          view={dailyView}
-          onViewChange={setDailyView}
-          highlightLast={dailyGranularity === "daily" || dailyGranularity === "hourly"}
-          chartType={dailyGranularity === "hourly" ? "line" : "auto"}
-          labelFormat={(r) =>
-            dailyGranularity === "hourly"
-              ? `${r.date.slice(11, 13)}시`
-              : dailyGranularity === "weekly"
-                ? weekLabel(r.date)
-                : dailyGranularity === "monthly"
-                  ? monthLabel(r.date)
-                  : r.date.slice(5)
-          }
-          onCopy={copyDailyToClipboard}
-          emptyText={t("dashboard.empty")}
-        />
+              </>
+            }
+            rows={dailyRows}
+            metric={dailyMetric}
+            onMetricChange={setDailyMetric}
+            view={dailyView}
+            onViewChange={setDailyView}
+            highlightLast={dailyGranularity === "daily" || dailyGranularity === "hourly"}
+            chartType={dailyGranularity === "hourly" ? "line" : "auto"}
+            labelFormat={(r) =>
+              dailyGranularity === "hourly"
+                ? `${r.date.slice(11, 13)}시`
+                : dailyGranularity === "weekly"
+                  ? weekLabel(r.date)
+                  : dailyGranularity === "monthly"
+                    ? monthLabel(r.date)
+                    : r.date.slice(5)
+            }
+            onCopy={copyDailyToClipboard}
+            emptyText={t("dashboard.empty")}
+          />
         </div>
 
         {/* ============ ROW 2: Activity carousel (col-4) ============ */}
@@ -816,9 +770,7 @@ export function Dashboard() {
                       <div className="text-[10px] font-bold tracking-[0.14em] uppercase text-text-tertiary mb-1.5">
                         활동일
                       </div>
-                      <div className="num text-[20px] font-medium text-lime">
-                        {activeDays}/56
-                      </div>
+                      <div className="num text-[20px] font-medium text-lime">{activeDays}/56</div>
                     </div>
                   </div>
                 </div>
@@ -881,14 +833,12 @@ export function Dashboard() {
 
         {/* ============ ROW 3: 4 col-3 cards ============ */}
         <MiniStatCard
-          eyebrow="이번 주 · 월~일"
+          eyebrow={`이번 주 · ${usageScopeLabel}`}
           value={formatTokensCompact(thisWeek.tokens)}
           suffix="tokens"
           subline={
             <>
-              <span className="num text-text-secondary">
-                {formatTokensCompact(thisWeek.cache)}
-              </span>{" "}
+              <span className="num text-text-secondary">{formatTokensCompact(thisWeek.cache)}</span>{" "}
               cached · {thisWeek.days}일 활동
             </>
           }
@@ -902,7 +852,7 @@ export function Dashboard() {
         />
 
         <MiniStatCard
-          eyebrow={`이번 달 · ${new Date().getMonth() + 1}월 1일~`}
+          eyebrow={`이번 달 · ${usageScopeLabel}`}
           value={formatTokensCompact(monthToDate.tokens)}
           suffix="tokens"
           subline={
@@ -924,23 +874,23 @@ export function Dashboard() {
 
         <section className="mc-card col-span-3">
           <header className="mb-3.5">
-            <span className="mc-eyebrow">도구별 비용 · 7일</span>
+            <span className="mc-eyebrow">소스별 비용 · {usageScopeLabel}</span>
           </header>
-          <MiniBarList
-            items={toolItems}
-            formatValue={(v) => formatUSD(v)}
-            emphasizeMax="amber"
-          />
+          <MiniBarList items={toolItems} formatValue={(v) => formatUSD(v)} emphasizeMax="amber" />
         </section>
 
         <section className="mc-card col-span-3">
           <header className="mb-3.5 flex items-center justify-between gap-2 flex-wrap">
             <span className="mc-eyebrow">
-              모델별 토큰 · {MODEL_RANGES.find((r) => r.value === modelRange)?.label}
+              모델별 토큰 · {usageScopeLabel} ·{" "}
+              {MODEL_RANGES.find((r) => r.value === modelRange)?.label}
             </span>
             <CarouselControls
               count={MODEL_RANGES.length}
-              activeIndex={Math.max(0, MODEL_RANGES.findIndex((r) => r.value === modelRange))}
+              activeIndex={Math.max(
+                0,
+                MODEL_RANGES.findIndex((r) => r.value === modelRange)
+              )}
               onIndexChange={(i) => setModelRange(MODEL_RANGES[i]!.value)}
               labels={MODEL_RANGES.map((r) => r.label)}
             />
@@ -963,10 +913,10 @@ export function Dashboard() {
 function calcRange(
   ts: Point[],
   kind: "this-week" | "this-month",
+  nowMs: number
 ): { tokens: number; cost: number; cache: number; days: number; totalInput: number } {
-  if (ts.length === 0)
-    return { tokens: 0, cost: 0, cache: 0, days: 0, totalInput: 0 };
-  const now = new Date();
+  if (ts.length === 0) return { tokens: 0, cost: 0, cache: 0, days: 0, totalInput: 0 };
+  const now = new Date(nowMs);
   let start: number;
   let end: number;
   if (kind === "this-week") {
@@ -981,7 +931,7 @@ function calcRange(
     end = sunday.getTime();
   } else {
     start = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-    end = Date.now();
+    end = nowMs;
   }
   const filtered = ts.filter((p) => p.ts >= start && p.ts <= end);
   const dayKeys = new Set(filtered.map((p) => localDateKey(p.ts)));
@@ -1006,44 +956,3 @@ function formatRelativeShort(ms: number): string {
   if (ms < 86_400_000) return `${Math.floor(ms / 3600_000)}시간`;
   return `${Math.floor(ms / 86_400_000)}일`;
 }
-
-interface QuotaRowProps {
-  name: string;
-  sub?: string;
-  meta: string;
-  value: number;
-  hint?: string | null;
-}
-function QuotaRow({ name, sub, meta, value, hint }: QuotaRowProps) {
-  const pct = (value * 100).toFixed(1);
-  return (
-    <div className="mt-4 first:mt-1">
-      <div className="flex items-center justify-between mb-2 gap-3">
-        <div className="text-[13px] font-semibold text-text-primary whitespace-nowrap">
-          {name}
-          {sub && (
-            <span className="font-normal text-text-tertiary text-[11px] ml-1.5">
-              {sub}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2.5 text-[11px] text-text-tertiary whitespace-nowrap shrink-0">
-          <span>{meta}</span>
-          <span className={`num text-[13px] font-medium ${quotaSignalClass(value)}`}>
-            {pct}%
-          </span>
-        </div>
-      </div>
-      <QuotaSegBar value={value} />
-      {hint ? (
-        // hint 는 항상 주의 메시지(조기 소진/한도 도달)이므로 amber 고정.
-        // (사용률 기반 색을 쓰면 낮은 사용률 초반 경고가 lime 으로 나와 의미 모순)
-        <div className="mt-1.5 text-[10.5px] font-medium text-amber">{hint}</div>
-      ) : null}
-    </div>
-  );
-}
-
-// KpiCard import 사용처 없는 경우 빈 wrapper 임포트로 만들지 않게 leave-out:
-// (실제로 KpiCard 는 future use 를 위해 export 만 됨.)
-export const __kpi_card_in_use = KpiCard;

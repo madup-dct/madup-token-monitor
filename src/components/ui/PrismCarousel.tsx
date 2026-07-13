@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 interface PrismFace {
   key: string;
@@ -16,12 +16,12 @@ interface PrismCarouselProps {
   intervalMs?: number;
   /// 면 높이 (px). 3D 회전체라 컨테이너 높이 고정 필요.
   height?: number;
+  motion?: "prism" | "slide";
 }
 
 function prefersReducedMotion(): boolean {
   return (
-    typeof window !== "undefined" &&
-    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
   );
 }
 
@@ -35,20 +35,18 @@ export function PrismCarousel({
   paused,
   intervalMs = 5000,
   height = 460,
+  motion = "prism",
 }: PrismCarouselProps) {
   const [hover, setHover] = useState(false);
   const reduced = prefersReducedMotion();
   const n = faces.length;
-  const idxRef = useRef(activeIndex);
-  idxRef.current = activeIndex;
-
   useEffect(() => {
-    if (!auto || paused || hover || n <= 1) return;
+    if (!auto || paused || hover || faces.length <= 1) return;
     const id = window.setInterval(() => {
-      onIndexChange((idxRef.current + 1) % n);
+      onIndexChange((activeIndex + 1) % faces.length);
     }, intervalMs);
     return () => window.clearInterval(id);
-  }, [auto, paused, hover, n, intervalMs, onIndexChange]);
+  }, [activeIndex, auto, paused, hover, faces.length, intervalMs, onIndexChange]);
 
   // 면 각도: 3면이면 120°씩. translateZ 반지름은 컨테이너 폭 추정으로 충분히 큰 값.
   const stepDeg = 360 / Math.max(1, n);
@@ -66,7 +64,8 @@ export function PrismCarousel({
         {faces.map((f, i) => (
           <div
             key={f.key}
-            className="absolute inset-0 transition-opacity duration-300"
+            aria-hidden={i !== activeIndex}
+            className="absolute inset-0 overflow-y-auto transition-opacity duration-300"
             style={{
               opacity: i === activeIndex ? 1 : 0,
               pointerEvents: i === activeIndex ? "auto" : "none",
@@ -75,6 +74,37 @@ export function PrismCarousel({
             {f.node}
           </div>
         ))}
+      </div>
+    );
+  }
+
+  if (motion === "slide") {
+    return (
+      <div
+        className="relative overflow-hidden"
+        style={{ height }}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+      >
+        {faces.map((face, index) => {
+          const rawOffset = index - activeIndex;
+          const offset =
+            rawOffset > n / 2 ? rawOffset - n : rawOffset < -n / 2 ? rawOffset + n : rawOffset;
+          return (
+            <div
+              key={face.key}
+              aria-hidden={index !== activeIndex}
+              className="absolute inset-0 overflow-y-auto transition-[transform,opacity] duration-500 ease-out"
+              style={{
+                transform: `translateX(${offset * 100}%)`,
+                opacity: index === activeIndex ? 1 : 0,
+                pointerEvents: index === activeIndex ? "auto" : "none",
+              }}
+            >
+              {face.node}
+            </div>
+          );
+        })}
       </div>
     );
   }
@@ -96,13 +126,12 @@ export function PrismCarousel({
         {faces.map((f, i) => (
           <div
             key={f.key}
+            aria-hidden={i !== activeIndex}
             className="absolute inset-0 overflow-y-auto"
             style={{
               transform: `rotateY(${i * stepDeg}deg) translateZ(${radius}px)`,
               backfaceVisibility: "hidden",
               WebkitBackfaceVisibility: "hidden",
-              opacity: i === activeIndex ? 1 : 0.0,
-              transition: "opacity 320ms ease",
               pointerEvents: i === activeIndex ? "auto" : "none",
             }}
           >

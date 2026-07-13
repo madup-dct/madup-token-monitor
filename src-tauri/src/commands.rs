@@ -4,8 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::db::{db_path, open, range_bounds};
-use crate::models::{DayCount, McpUsage, PluginUsage, Point, Summary, SourceSummary, ModelSummary, ToolUsage};
-use crate::pricing::usd_to_krw_rate;
+use crate::models::{DayCount, McpUsage, PluginUsage, Point, ToolUsage};
 
 /// 오늘(local-tz 자정 기준) USD 비용 합계. 트레이 타이틀 표시용.
 pub fn today_cost_usd() -> f64 {
@@ -184,115 +183,6 @@ pub fn delete_all_data() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn get_summary(range: String) -> Result<Summary, String> {
-    let conn = open().map_err(|e| e.to_string())?;
-    let (start, end) = range_bounds(&range);
-
-    let mut stmt = conn
-        .prepare(
-            "SELECT source, model,
-                    COALESCE(SUM(input_tokens),0),
-                    COALESCE(SUM(output_tokens),0),
-                    COALESCE(SUM(cache_read),0),
-                    COALESCE(SUM(cache_write),0),
-                    COALESCE(SUM(cost_usd),0.0)
-             FROM usage_events
-             WHERE ts BETWEEN ?1 AND ?2
-             GROUP BY source, model",
-        )
-        .map_err(|e| e.to_string())?;
-
-    let rows = stmt
-        .query_map(params![start, end], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, f64>(6)?,
-            ))
-        })
-        .map_err(|e| e.to_string())?;
-
-    let mut total_input = 0i64;
-    let mut total_output = 0i64;
-    let mut total_cache_read = 0i64;
-    let mut total_cache_write = 0i64;
-    let mut total_cost = 0f64;
-    let mut source_map: std::collections::HashMap<String, SourceSummary> =
-        std::collections::HashMap::new();
-    let mut model_map: std::collections::HashMap<String, ModelSummary> =
-        std::collections::HashMap::new();
-
-    for row in rows.flatten() {
-        let (source, model, inp, out, cr, cw, cost) = row;
-        total_input += inp;
-        total_output += out;
-        total_cache_read += cr;
-        total_cache_write += cw;
-        total_cost += cost;
-
-        let se = source_map.entry(source.clone()).or_insert(SourceSummary {
-            source: source.clone(),
-            input_tokens: 0,
-            output_tokens: 0,
-            cost_usd: 0.0,
-        });
-        se.input_tokens += inp;
-        se.output_tokens += out;
-        se.cost_usd += cost;
-
-        if let Some(m) = model {
-            let me = model_map.entry(m.clone()).or_insert(ModelSummary {
-                model: m,
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_read: 0,
-                cache_write: 0,
-                cost_usd: 0.0,
-            });
-            me.input_tokens += inp;
-            me.output_tokens += out;
-            me.cache_read += cr;
-            me.cache_write += cw;
-            me.cost_usd += cost;
-        }
-    }
-
-    // 메시지 / 세션 카운트는 별도 쿼리
-    let message_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM usage_events WHERE ts BETWEEN ?1 AND ?2",
-            params![start, end],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    let session_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(DISTINCT session_id) FROM usage_events WHERE ts BETWEEN ?1 AND ?2 AND session_id IS NOT NULL",
-            params![start, end],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    let rate = usd_to_krw_rate();
-    Ok(Summary {
-        total_input_tokens: total_input,
-        total_output_tokens: total_output,
-        total_cache_read,
-        total_cache_write,
-        total_cost_usd: total_cost,
-        total_cost_krw: total_cost * rate,
-        message_count,
-        session_count,
-        by_source: source_map.into_values().collect(),
-        by_model: model_map.into_values().collect(),
-    })
-}
-
-#[tauri::command]
 pub fn get_timeseries(range: String, source: Option<String>) -> Result<Vec<Point>, String> {
     let conn = open().map_err(|e| e.to_string())?;
     let (start, end) = range_bounds(&range);
@@ -437,7 +327,7 @@ pub fn get_top_tools(range: String) -> Result<Vec<ToolUsage>, String> {
 }
 
 #[tauri::command]
-pub fn get_heatmap(days: Option<i64>) -> Result<Vec<DayCount>, String> {
+pub fn get_heatmap(days: Option<i64>, source: Option<String>) -> Result<Vec<DayCount>, String> {
     let conn = open().map_err(|e| e.to_string())?;
     let n = days.unwrap_or(30);
     let now = chrono::Utc::now().timestamp_millis();
@@ -445,18 +335,18 @@ pub fn get_heatmap(days: Option<i64>) -> Result<Vec<DayCount>, String> {
 
     let mut stmt = conn
         .prepare(
-            "SELECT date(ts / 1000, 'unixepoch') as day,
+            "SELECT date(ts / 1000, 'unixepoch', '+9 hours') as day,
                     COUNT(*) as cnt,
                     COALESCE(SUM(cost_usd), 0.0)
              FROM usage_events
-             WHERE ts >= ?1
+             WHERE ts >= ?1 AND (?2 IS NULL OR source = ?2)
              GROUP BY day
              ORDER BY day",
         )
         .map_err(|e| e.to_string())?;
 
     let items = stmt
-        .query_map(params![start], |row| {
+        .query_map(params![start, source], |row| {
             Ok(DayCount {
                 date: row.get(0)?,
                 count: row.get(1)?,
@@ -479,7 +369,10 @@ mod tests {
     #[test]
     fn data_files_derive_from_db_path() {
         let files = data_files(Path::new("/x/y/data.db"));
-        let names: Vec<String> = files.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        let names: Vec<String> = files
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
         assert_eq!(
             names,
             vec![

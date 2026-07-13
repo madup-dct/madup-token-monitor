@@ -2,12 +2,14 @@
 // [MODULE MARKER] W2: 파일 워처 + JSONL 파서 + SQLite
 // 아래 주석 아래에 mod watcher; mod parser; mod db; 추가
 // ============================================================
+pub mod codex_limits;
 pub mod commands;
 pub mod db;
 pub mod models;
 pub mod parser;
 pub mod plugins;
 pub mod pricing;
+pub mod summary;
 pub mod watcher;
 
 // ============================================================
@@ -57,11 +59,13 @@ fn restart_app(app: tauri::AppHandle) {
 // ============================================================
 
 use aggregator::{clear_supabase_session, set_supabase_session, sync_aggregates_now};
+use codex_limits::get_codex_rate_limits;
 use commands::{
-    clear_cache_dir, delete_all_data, get_heatmap, get_settings, get_summary, get_timeseries,
+    clear_cache_dir, delete_all_data, get_heatmap, get_settings, get_timeseries,
     get_today_cost_usd, get_top_mcp, get_top_plugins, get_top_tools, set_setting,
 };
 use oauth_usage::{get_oauth_usage, refresh_oauth_usage};
+use summary::get_summary;
 use tauri::Manager;
 use tauri_plugin_deep_link::DeepLinkExt;
 
@@ -107,6 +111,7 @@ pub fn run() {
             clear_supabase_session,
             get_oauth_usage,
             refresh_oauth_usage,
+            get_codex_rate_limits,
             get_settings,
             set_setting,
             clear_cache_dir,

@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useAuthUser } from "@/hooks/useAuthUser";
 
 const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -17,7 +16,6 @@ export function TitleBar({
   title = "매드업 토큰 모니터",
   subtitle,
 }: TitleBarProps) {
-  const { user } = useAuthUser();
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -128,23 +126,7 @@ export function TitleBar({
         )}
       </div>
 
-      {/* 우측 — wrapper 는 drag, pill 자체만 no-drag */}
-      <div
-        data-tauri-drag-region
-        className="flex justify-end items-center gap-2 h-full"
-      >
-        {user ? (
-          <span className="mc-pill mc-pill-success" {...NO_DRAG}>
-            <span className="w-1.5 h-1.5 rounded-full bg-lime shadow-[0_0_8px_var(--color-lime)] animate-[livepulse_1.6s_ease-in-out_infinite]" />
-            <span>OAuth 연결됨</span>
-          </span>
-        ) : (
-          <span className="mc-pill mc-pill-warning" {...NO_DRAG}>
-            <span className="w-1.5 h-1.5 rounded-full bg-amber" />
-            <span>인증 대기 중</span>
-          </span>
-        )}
-      </div>
+      <div data-tauri-drag-region aria-hidden="true" />
     </div>
   );
 }

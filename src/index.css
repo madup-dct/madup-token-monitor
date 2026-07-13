@@ -567,6 +567,20 @@ html.theme-light {
   }
 }
 
+.mc-source-carousel-controls {
+  gap: 2px;
+  min-height: 32px;
+  padding: 0 2px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+}
+
+.mc-source-carousel-controls button {
+  min-width: 32px;
+  min-height: 32px;
+}
+
 @utility mc-chip {
   display: inline-flex;
   align-items: center;

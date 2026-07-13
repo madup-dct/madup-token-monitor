@@ -329,6 +329,13 @@ components:
     backgroundColor: "{colors.azure}"
     textColor: "{colors.text-on-accent}"
     rounded: "{rounded.sm}"
+  source-carousel:
+    backgroundColor: "{colors.surface-2}"
+    textColor: "{colors.text-primary}"
+    typography: "{typography.button-sm}"
+    rounded: "{rounded.md}"
+    height: 30px
+    padding: "2px {spacing.xxs}"
   select-pill:
     backgroundColor: "{colors.surface-2}"
     textColor: "{colors.text-primary}"
@@ -557,6 +564,16 @@ The two-tier philosophy is the same as any modern dashboard: **interactive eleme
 - Active option: background `{colors.azure}`, text `{colors.text-on-accent}`, inner-rounded `{rounded.sm}` to nest inside the outer track
 - Used for: Tokens/Cost toggle, Chart/List toggle, granularity (Daily/Weekly/Monthly)
 
+**`source-carousel`** — the global token-source selector
+- Three manually controlled faces in the fixed order `통합` → `Claude` → `Codex`; `통합` means exactly Claude + Codex and never includes future providers implicitly
+- Header control uses previous/next icon buttons plus three labeled position dots; the active face name stays visible so every downstream token value has an explicit source context
+- The quota/summary card body uses a horizontal slide (`500ms`, `ease-out`) so the outgoing and incoming source remain visible throughout the transition, while all token-related dashboard values update from the same persisted selection
+- No automatic rotation. A data source must never change without a user action
+- `Claude` shows OAuth 5h/7d limits when available. `Codex` shows the latest account `rate_limits.used_percent` recorded in Codex rollout events, including each window and model-specific limit. A window whose reset time has passed is labeled `갱신 대기` instead of displaying the stale percentage
+- `통합` shows absolute Claude + Codex token summaries because percentages from different provider contracts cannot be added. Claude OAuth percentages must never be relabeled as Codex data
+- Keyboard: every arrow and dot is a native button with a source-specific accessible name; focus stays on the activated control after rotation
+- Reduced motion: replace the slide with the existing cross-fade fallback and retain the same content order
+
 **`select-pill`** — dropdown filter
 - Background `{colors.surface-2}`, text `{colors.text-primary}`, rounded `{rounded.md}`, height 30px, padding 0 12px, with a 10px caret on the right
 
@@ -704,6 +721,8 @@ When the viewport drops below default width, cards collapse in this order:
 ### Touch Targets
 
 Every interactive element clears 32 × 32px (this is a mouse-first desktop product; pointer targets are smaller than mobile but not below 32px). Title-bar icons sit at 30px height, segmented-control segments at 28px, nav items at 36px.
+
+The `source-carousel` remains a single compact row at the 1200px minimum window width. Its arrow buttons keep a 32px hit area even when the visible icon is smaller, and the active source label must not truncate in Korean or English.
 
 ## Iteration Guide
 

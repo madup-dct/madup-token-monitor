@@ -7,6 +7,7 @@ interface CarouselControlsProps {
   /// 자동 회전 토글 — 미지정 시 토글 자체를 렌더하지 않음 (수동 전환 전용 캐러셀).
   auto?: boolean;
   onAutoChange?: (next: boolean) => void;
+  className?: string;
 }
 
 /// 기간 캐러셀 컨트롤 — 이전/점/다음 + 자동 회전 토글.
@@ -18,17 +19,29 @@ export function CarouselControls({
   labels,
   auto,
   onAutoChange,
+  className,
 }: CarouselControlsProps) {
+  const previousLabel = labels[(activeIndex + count - 1) % count] ?? "이전 항목";
+  const nextLabel = labels[(activeIndex + 1) % count] ?? "다음 항목";
   return (
-    <div className="flex items-center gap-2 shrink-0">
+    <div className={`flex items-center gap-2 shrink-0 ${className ?? ""}`}>
       <button
         type="button"
         onClick={() => onIndexChange((activeIndex + count - 1) % count)}
-        aria-label="이전"
-        title="이전"
+        aria-label={`이전: ${previousLabel}`}
+        title={`이전: ${previousLabel}`}
         className="mc-icon-btn"
       >
-        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <path d="M10 3L5 8l5 5" />
         </svg>
       </button>
@@ -39,22 +52,36 @@ export function CarouselControls({
             type="button"
             onClick={() => onIndexChange(i)}
             aria-label={labels[i] ?? String(i + 1)}
+            aria-pressed={i === activeIndex}
             title={labels[i] ?? String(i + 1)}
-            className="w-2 h-2 rounded-full transition-colors"
-            style={{
-              background: i === activeIndex ? "var(--color-azure)" : "var(--color-surface-3)",
-            }}
-          />
+            className="w-[18px] h-[26px] grid place-items-center rounded-md"
+          >
+            <span
+              className="block w-2 h-2 rounded-full transition-colors"
+              style={{
+                background: i === activeIndex ? "var(--color-azure)" : "var(--color-surface-3)",
+              }}
+            />
+          </button>
         ))}
       </div>
       <button
         type="button"
         onClick={() => onIndexChange((activeIndex + 1) % count)}
-        aria-label="다음"
-        title="다음"
+        aria-label={`다음: ${nextLabel}`}
+        title={`다음: ${nextLabel}`}
         className="mc-icon-btn"
       >
-        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <path d="M6 3l5 5-5 5" />
         </svg>
       </button>
@@ -64,6 +91,7 @@ export function CarouselControls({
             type="button"
             role="switch"
             aria-checked={auto}
+            aria-label={auto ? "자동 넘기기 끄기" : "자동 넘기기 켜기"}
             onClick={() => onAutoChange(!auto)}
             title="자동 넘기기"
             className="relative w-[34px] h-[20px] rounded-full transition-colors shrink-0 ml-1"

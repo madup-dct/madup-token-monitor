@@ -1,5 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import type { Summary, Point, McpUsage, PluginUsage, DayCount, Range, ToolUsage } from "@/types/models";
+import type {
+  Summary,
+  Point,
+  McpUsage,
+  PluginUsage,
+  DayCount,
+  Range,
+  ToolUsage,
+} from "@/types/models";
 import {
   buildMockSummary,
   buildMockTimeseries,
@@ -10,6 +18,10 @@ import {
   buildMockCompanyTopMcp,
 } from "@/mocks/usageMock";
 import { supabase } from "@/lib/supabase";
+import { mergeDayCounts, mergeSummaries, type UsageSource } from "@/lib/usage-sources";
+
+export { refreshOAuthUsage, useCodexRateLimits, useOAuthUsage } from "@/hooks/useRateLimits";
+export type { OAuthUsage, OAuthUsageWindow, OAuthUsageWithError } from "@/hooks/useRateLimits";
 
 const IS_MOCK = !("__TAURI_INTERNALS__" in window);
 
@@ -22,13 +34,24 @@ function delay<T>(val: T): Promise<T> {
   return new Promise((r) => setTimeout(() => r(val), 150));
 }
 
-export function useSummary(range: Range) {
+export function useSummary(range: Range, sources?: readonly UsageSource[]) {
   return useQuery({
-    queryKey: ["summary", range],
-    queryFn: () =>
-      IS_MOCK
-        ? delay(buildMockSummary(range))
-        : tauriInvoke<Summary>("get_summary", { range }),
+    queryKey: ["summary", range, sources],
+    queryFn: async () => {
+      if (!sources || sources.length === 0) {
+        return IS_MOCK
+          ? delay(buildMockSummary(range))
+          : tauriInvoke<Summary>("get_summary", { range, source: null });
+      }
+      const summaries = await Promise.all(
+        sources.map((source) =>
+          IS_MOCK
+            ? delay(buildMockSummary(range, source))
+            : tauriInvoke<Summary>("get_summary", { range, source })
+        )
+      );
+      return mergeSummaries(summaries);
+    },
     staleTime: 30_000,
   });
 }
@@ -73,8 +96,7 @@ interface MyAggregateRow {
 
 function rangeStartDate(range: Range): string | null {
   if (range === "all") return null;
-  const days =
-    range === "1d" ? 0 : range === "7d" ? 7 : range === "30d" ? 30 : 365;
+  const days = range === "1d" ? 0 : range === "7d" ? 7 : range === "30d" ? 30 : 365;
   const d = new Date();
   d.setHours(0, 0, 0, 0);
   d.setDate(d.getDate() - days);
@@ -90,7 +112,7 @@ function rangeStartDate(range: Range): string | null {
 /// 로컬 invoke fallback.
 async function fetchMyAggregatedPoints(
   range: Range,
-  source?: string,
+  sources?: readonly UsageSource[]
 ): Promise<Point[] | null> {
   try {
     const { data: sess } = await supabase.auth.getSession();
@@ -102,16 +124,13 @@ async function fetchMyAggregatedPoints(
       .eq("user_id", uid);
     const start = rangeStartDate(range);
     if (start) q = q.gte("date", start);
-    if (source) q = q.eq("source", source);
+    if (sources && sources.length > 0) q = q.in("source", [...sources]);
     const { data, error } = await q;
     if (error || !data) return null;
     const rows = data as MyAggregateRow[];
     return rows.map((r) => {
       const localMidnight = new Date(r.date + "T00:00:00").getTime();
-      const cacheRemainder = Math.max(
-        0,
-        r.total_tokens - r.total_input - r.total_output,
-      );
+      const cacheRemainder = Math.max(0, r.total_tokens - r.total_input - r.total_output);
       return {
         ts: localMidnight,
         input_tokens: r.total_input,
@@ -126,19 +145,28 @@ async function fetchMyAggregatedPoints(
   }
 }
 
-export function useTimeseries(range: Range, source?: string) {
+export function useTimeseries(range: Range, sources?: readonly UsageSource[]) {
   return useQuery({
-    queryKey: ["timeseries", range, source],
+    queryKey: ["timeseries", range, sources],
     queryFn: async () => {
-      if (IS_MOCK) return delay(buildMockTimeseries(range, source));
-      // 로그인 시 Supabase 합산본 우선 (다중 디바이스), 실패/비로그인 시 로컬.
-      // 시간별(hourly) 차트는 일(day) 단위 usage_aggregates 가 부적합해 별도 useMyHourly 사용.
-      const agg = await fetchMyAggregatedPoints(range, source);
-      if (agg && agg.length > 0) return agg;
-      return tauriInvoke<Point[]>("get_timeseries", {
-        range,
-        source: source ?? null,
-      });
+      if (!sources || sources.length === 0) {
+        if (IS_MOCK) return delay(buildMockTimeseries(range));
+        const aggregate = await fetchMyAggregatedPoints(range);
+        if (aggregate !== null) return aggregate;
+        return tauriInvoke<Point[]>("get_timeseries", { range, source: null });
+      }
+      if (IS_MOCK) {
+        const points = await Promise.all(
+          sources.map((source) => delay(buildMockTimeseries(range, source)))
+        );
+        return points.flat();
+      }
+      const aggregate = await fetchMyAggregatedPoints(range, sources);
+      if (aggregate !== null) return aggregate;
+      const points = await Promise.all(
+        sources.map((source) => tauriInvoke<Point[]>("get_timeseries", { range, source }))
+      );
+      return points.flat();
     },
     staleTime: 30_000,
   });
@@ -147,6 +175,7 @@ export function useTimeseries(range: Range, source?: string) {
 // usage_hourly row (본인 user_id 만 RLS 로 SELECT 허용).
 interface MyHourlyRow {
   hour_utc: string; // UTC 정시 버킷 ISO
+  source: string;
   input_tokens: number;
   output_tokens: number;
   cache_read: number;
@@ -159,22 +188,27 @@ interface MyHourlyRow {
 /// PK (user_id,hour_utc,source,model,device_id) 라 한 hour 에 여러 행이 올 수 있으나,
 /// 소비처(Dashboard)의 aggregateByPeriod 가 hour 버킷으로 합산하므로 그대로 매핑한다.
 /// enabled=시간별 뷰일 때만 true. 실패/비로그인 시 [].
-export function useMyHourly(enabled: boolean) {
+export function useMyHourly(enabled: boolean, sources?: readonly UsageSource[]) {
   return useQuery<Point[]>({
-    queryKey: ["my_hourly"],
+    queryKey: ["my_hourly", sources],
     enabled,
     queryFn: async () => {
-      if (IS_MOCK) return delay(buildMockTimeseries("1d"));
+      if (IS_MOCK) {
+        const selectedSources = sources ?? ["claude", "codex"];
+        return delay(selectedSources.flatMap((source) => buildMockTimeseries("1d", source)));
+      }
       const { data: sess } = await supabase.auth.getSession();
       const uid = sess.session?.user.id;
       if (!uid) return [];
       // 최근 2일 (오늘 시간별 + 자정 경계 여유). hour_utc 는 UTC ISO.
       const since = new Date(Date.now() - 2 * 86_400_000).toISOString();
-      const { data, error } = await supabase
+      let query = supabase
         .from("usage_hourly")
-        .select("hour_utc,input_tokens,output_tokens,cache_read,cache_write,cost_usd")
+        .select("hour_utc,source,input_tokens,output_tokens,cache_read,cache_write,cost_usd")
         .eq("user_id", uid)
         .gte("hour_utc", since);
+      if (sources && sources.length > 0) query = query.in("source", [...sources]);
+      const { data, error } = await query;
       if (error || !data) return [];
       return (data as MyHourlyRow[]).map((r) => ({
         ts: Date.parse(r.hour_utc),
@@ -193,9 +227,7 @@ export function useTopMcp(range: Range) {
   return useQuery({
     queryKey: ["top_mcp", range],
     queryFn: () =>
-      IS_MOCK
-        ? delay(buildMockTopMcp(range))
-        : tauriInvoke<McpUsage[]>("get_top_mcp", { range }),
+      IS_MOCK ? delay(buildMockTopMcp(range)) : tauriInvoke<McpUsage[]>("get_top_mcp", { range }),
     staleTime: 30_000,
   });
 }
@@ -222,66 +254,26 @@ export function useTopTools(range: Range) {
   });
 }
 
-export function useHeatmap(days?: number) {
+export function useHeatmap(days?: number, sources?: readonly UsageSource[]) {
   return useQuery({
-    queryKey: ["heatmap", days],
-    queryFn: () =>
-      IS_MOCK
-        ? delay(buildMockHeatmap(days))
-        : tauriInvoke<DayCount[]>("get_heatmap", { days: days ?? null }),
+    queryKey: ["heatmap", days, sources],
+    queryFn: async () => {
+      if (!sources || sources.length === 0) {
+        return IS_MOCK
+          ? delay(buildMockHeatmap(days))
+          : tauriInvoke<DayCount[]>("get_heatmap", { days: days ?? null, source: null });
+      }
+      const groups = await Promise.all(
+        sources.map((source) =>
+          IS_MOCK
+            ? delay(buildMockHeatmap(days, source))
+            : tauriInvoke<DayCount[]>("get_heatmap", { days: days ?? null, source })
+        )
+      );
+      return mergeDayCounts(groups);
+    },
     staleTime: 60_000,
   });
-}
-
-export interface OAuthUsageWindow {
-  utilization: number;
-  resets_at: string;
-}
-
-export interface OAuthUsage {
-  five_hour: OAuthUsageWindow | null;
-  seven_day: OAuthUsageWindow | null;
-  seven_day_sonnet: OAuthUsageWindow | null;
-  seven_day_opus: OAuthUsageWindow | null;
-  fetched_at: string;
-  is_stale: boolean;
-}
-
-export interface OAuthUsageWithError {
-  data: OAuthUsage | null;
-  error: string | null;
-}
-
-export function useOAuthUsage() {
-  return useQuery<OAuthUsageWithError>({
-    queryKey: ["oauthUsage"],
-    queryFn: async () => {
-      if (IS_MOCK) return { data: null, error: null };
-      try {
-        const data = await tauriInvoke<OAuthUsage>("get_oauth_usage");
-        return { data, error: null };
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        // eslint-disable-next-line no-console
-        console.warn("[oauth_usage] fetch failed:", msg);
-        return { data: null, error: msg };
-      }
-    },
-    staleTime: 5 * 60_000,
-    refetchInterval: 5 * 60_000,
-    retry: 1,
-  });
-}
-
-export async function refreshOAuthUsage(): Promise<OAuthUsageWithError> {
-  if (IS_MOCK) return { data: null, error: null };
-  try {
-    const data = await tauriInvoke<OAuthUsage>("refresh_oauth_usage");
-    return { data, error: null };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return { data: null, error: msg };
-  }
 }
 
 // Supabase RPC `get_top_mcp_servers` 결과 row 형태
@@ -537,7 +529,7 @@ export function useEntityUsers(
   kind: "mcp" | "plugin" | null,
   entity: string | null,
   rangeDays = 30,
-  range?: { start: string; end: string },
+  range?: { start: string; end: string }
 ) {
   return useQuery<EntityUserRow[], Error>({
     queryKey: ["entity_users", kind, entity, rangeDays, range?.start ?? null, range?.end ?? null],
@@ -618,4 +610,3 @@ export function useCompanyHourlyByUser(hours = 48, enabled = true) {
     retry: 0,
   });
 }
-

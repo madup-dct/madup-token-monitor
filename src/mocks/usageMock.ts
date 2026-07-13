@@ -1,4 +1,14 @@
-import type { Summary, Point, McpUsage, PluginUsage, DayCount, Range, LeaderboardEntry, ToolUsage } from "@/types/models";
+import type {
+  Summary,
+  Point,
+  McpUsage,
+  PluginUsage,
+  DayCount,
+  Range,
+  LeaderboardEntry,
+  ToolUsage,
+} from "@/types/models";
+import type { UsageSource } from "@/lib/usage-sources";
 
 function randomInt(min: number, max: number) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -10,13 +20,71 @@ function rangeToDays(range: Range): number {
   return 30;
 }
 
-export function buildMockSummary(range: Range): Summary {
+export function buildMockSummary(range: Range, source?: UsageSource): Summary {
   const days = rangeToDays(range);
-  const inp = randomInt(100_000, 400_000) * days;
-  const out = randomInt(20_000, 80_000) * days;
-  const cr = randomInt(10_000, 80_000) * days;
-  const cw = randomInt(5_000, 40_000) * days;
+  const sourceFactor = source === "claude" ? 0.65 : source === "codex" ? 0.35 : 1;
+  const inp = Math.floor(randomInt(100_000, 400_000) * days * sourceFactor);
+  const out = Math.floor(randomInt(20_000, 80_000) * days * sourceFactor);
+  const cr = Math.floor(randomInt(10_000, 80_000) * days * sourceFactor);
+  const cw = source === "codex" ? 0 : Math.floor(randomInt(5_000, 40_000) * days * sourceFactor);
   const cost = (inp * 3 + out * 15 + cr * 0.3) / 1_000_000;
+  const bySource = source
+    ? [{ source, input_tokens: inp, output_tokens: out, cost_usd: cost }]
+    : [
+        {
+          source: "claude",
+          input_tokens: Math.floor(inp * 0.65),
+          output_tokens: Math.floor(out * 0.65),
+          cost_usd: cost * 0.65,
+        },
+        {
+          source: "codex",
+          input_tokens: Math.floor(inp * 0.35),
+          output_tokens: Math.floor(out * 0.35),
+          cost_usd: cost * 0.35,
+        },
+      ];
+  const byModel =
+    source === "codex"
+      ? [
+          {
+            model: "gpt-5.6-sol",
+            input_tokens: inp,
+            output_tokens: out,
+            cache_read: cr,
+            cache_write: 0,
+            cost_usd: cost,
+          },
+        ]
+      : source === "claude"
+        ? [
+            {
+              model: "claude-opus-4-7",
+              input_tokens: inp,
+              output_tokens: out,
+              cache_read: cr,
+              cache_write: cw,
+              cost_usd: cost,
+            },
+          ]
+        : [
+            {
+              model: "claude-opus-4-7",
+              input_tokens: Math.floor(inp * 0.65),
+              output_tokens: Math.floor(out * 0.65),
+              cache_read: Math.floor(cr * 0.65),
+              cache_write: cw,
+              cost_usd: cost * 0.65,
+            },
+            {
+              model: "gpt-5.6-sol",
+              input_tokens: Math.floor(inp * 0.35),
+              output_tokens: Math.floor(out * 0.35),
+              cache_read: Math.floor(cr * 0.35),
+              cache_write: 0,
+              cost_usd: cost * 0.35,
+            },
+          ];
 
   return {
     total_input_tokens: inp,
@@ -27,28 +95,21 @@ export function buildMockSummary(range: Range): Summary {
     total_cost_krw: cost * 1380,
     message_count: randomInt(50, 500) * days,
     session_count: randomInt(1, 5) * days,
-    by_source: [
-      { source: "claude-code", input_tokens: Math.floor(inp * 0.6), output_tokens: Math.floor(out * 0.6), cost_usd: cost * 0.6 },
-      { source: "cursor", input_tokens: Math.floor(inp * 0.25), output_tokens: Math.floor(out * 0.25), cost_usd: cost * 0.25 },
-      { source: "api", input_tokens: Math.floor(inp * 0.15), output_tokens: Math.floor(out * 0.15), cost_usd: cost * 0.15 },
-    ],
-    by_model: [
-      { model: "claude-opus-4-7", input_tokens: Math.floor(inp * 0.4), output_tokens: Math.floor(out * 0.4), cache_read: Math.floor(cr * 0.4), cache_write: Math.floor(cw * 0.4), cost_usd: cost * 0.5 },
-      { model: "claude-sonnet-4-6", input_tokens: Math.floor(inp * 0.45), output_tokens: Math.floor(out * 0.45), cache_read: Math.floor(cr * 0.45), cache_write: Math.floor(cw * 0.45), cost_usd: cost * 0.35 },
-      { model: "claude-haiku-4-5", input_tokens: Math.floor(inp * 0.15), output_tokens: Math.floor(out * 0.15), cache_read: Math.floor(cr * 0.15), cache_write: Math.floor(cw * 0.15), cost_usd: cost * 0.15 },
-    ],
+    by_source: bySource,
+    by_model: byModel,
   };
 }
 
-export function buildMockTimeseries(range: Range, _source?: string): Point[] {
+export function buildMockTimeseries(range: Range, source?: UsageSource): Point[] {
   const days = rangeToDays(range);
+  const sourceFactor = source === "claude" ? 0.65 : source === "codex" ? 0.35 : 1;
   const now = Date.now();
   return Array.from({ length: days * 4 }, (_, i) => {
     const ts = now - (days * 4 - 1 - i) * 6 * 3_600_000;
-    const inp = randomInt(5_000, 60_000);
-    const out = randomInt(1_000, 15_000);
-    const cr = randomInt(80_000, 400_000);
-    const cw = randomInt(20_000, 100_000);
+    const inp = Math.floor(randomInt(5_000, 60_000) * sourceFactor);
+    const out = Math.floor(randomInt(1_000, 15_000) * sourceFactor);
+    const cr = Math.floor(randomInt(80_000, 400_000) * sourceFactor);
+    const cw = source === "codex" ? 0 : Math.floor(randomInt(20_000, 100_000) * sourceFactor);
     return {
       ts,
       input_tokens: inp,
@@ -73,7 +134,7 @@ export function buildMockTopMcp(range: Range): McpUsage[] {
     { mcp_server: "fetch", count: randomInt(5, 40) },
     { mcp_server: "memory", count: randomInt(3, 30) },
     { mcp_server: "sequential-thinking", count: randomInt(2, 20) },
-  ].map((m) => ({ ...m, count: Math.max(1, Math.round(m.count * days / 7)) }));
+  ].map((m) => ({ ...m, count: Math.max(1, Math.round((m.count * days) / 7)) }));
 }
 
 export function buildMockTopPlugins(range: Range): PluginUsage[] {
@@ -84,7 +145,7 @@ export function buildMockTopPlugins(range: Range): PluginUsage[] {
     { plugin_id: "impeccable", count: randomInt(20, 80) },
     { plugin_id: "frontend-design", count: randomInt(10, 60) },
     { plugin_id: "ui-ux-pro-max", count: randomInt(5, 40) },
-  ].map((p) => ({ ...p, count: Math.max(1, Math.round(p.count * days / 7)) }));
+  ].map((p) => ({ ...p, count: Math.max(1, Math.round((p.count * days) / 7)) }));
 }
 
 export function buildMockTopTools(range: Range): ToolUsage[] {
@@ -101,14 +162,15 @@ export function buildMockTopTools(range: Range): ToolUsage[] {
   ].map((t) => ({ ...t, count: Math.max(1, Math.round((t.count * days) / 7)) }));
 }
 
-export function buildMockHeatmap(days = 30): DayCount[] {
+export function buildMockHeatmap(days = 30, source?: UsageSource): DayCount[] {
+  const sourceFactor = source === "claude" ? 0.65 : source === "codex" ? 0.35 : 1;
   return Array.from({ length: days }, (_, i) => {
     const d = new Date();
     d.setDate(d.getDate() - (days - 1 - i));
     return {
       date: d.toISOString().slice(0, 10),
-      count: randomInt(0, 40),
-      cost_usd: Math.random() * 2,
+      count: Math.round(randomInt(0, 40) * sourceFactor),
+      cost_usd: Math.random() * 2 * sourceFactor,
     };
   });
 }
@@ -151,7 +213,10 @@ export function buildMockLeaderboard(myEmail?: string | null): LeaderboardEntry[
     const tokens =
       i < baseTokens.length
         ? baseTokens[i]
-        : Math.max(8_000_000, baseTokens[baseTokens.length - 1] - i * 4_000_000 - randomInt(-2_000_000, 2_000_000));
+        : Math.max(
+            8_000_000,
+            baseTokens[baseTokens.length - 1] - i * 4_000_000 - randomInt(-2_000_000, 2_000_000)
+          );
     const messages = Math.max(20, Math.round(tokens / randomInt(300_000, 800_000)));
     const cost = (tokens / 1_000_000) * randomInt(1, 4) + randomInt(0, 30);
     return {

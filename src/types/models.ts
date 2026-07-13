@@ -59,6 +59,21 @@ export interface DayCount {
   cost_usd: number;
 }
 
+export interface CodexRateLimitWindow {
+  readonly used_percent: number;
+  readonly window_minutes: number;
+  readonly resets_at: number;
+}
+
+export interface CodexRateLimitSnapshot {
+  readonly limit_id: string;
+  readonly limit_name: string | null;
+  readonly plan_type: string | null;
+  readonly primary: CodexRateLimitWindow | null;
+  readonly secondary: CodexRateLimitWindow | null;
+  readonly observed_at: number;
+}
+
 export type Range = "1d" | "7d" | "30d" | "90d" | "365d" | "all";
 
 export interface LeaderboardEntry {
