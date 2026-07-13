@@ -1,10 +1,10 @@
 import { useMyHourly, useSummary, useTimeseries } from "@/hooks/useUsage";
-import { mergeSummaries, type UsageScope } from "@/lib/usage-sources";
+import { mergeSummaries, sourcesForScope, type UsageScope } from "@/lib/usage-sources";
 import type { Point, Range, Summary } from "@/types/models";
 
-const COMBINED_SOURCES = ["claude", "codex"] as const;
-const CLAUDE_SOURCE = ["claude"] as const;
-const CODEX_SOURCE = ["codex"] as const;
+const COMBINED_SOURCES = sourcesForScope("combined");
+const CLAUDE_SOURCES = sourcesForScope("claude");
+const CODEX_SOURCES = sourcesForScope("codex");
 
 interface SummaryPair {
   readonly claude: Summary | undefined;
@@ -77,23 +77,23 @@ export function useDashboardUsage(
 function useTimeseriesSet(range: Range): PointSet {
   return {
     combined: useTimeseries(range, COMBINED_SOURCES).data,
-    claude: useTimeseries(range, CLAUDE_SOURCE).data,
-    codex: useTimeseries(range, CODEX_SOURCE).data,
+    claude: useTimeseries(range, CLAUDE_SOURCES).data,
+    codex: useTimeseries(range, CODEX_SOURCES).data,
   };
 }
 
 function useHourlySet(enabled: boolean): PointSet {
   return {
     combined: useMyHourly(enabled, COMBINED_SOURCES).data,
-    claude: useMyHourly(enabled, CLAUDE_SOURCE).data,
-    codex: useMyHourly(enabled, CODEX_SOURCE).data,
+    claude: useMyHourly(enabled, CLAUDE_SOURCES).data,
+    codex: useMyHourly(enabled, CODEX_SOURCES).data,
   };
 }
 
 function useSummaryPair(range: Range): SummaryPair {
   return {
-    claude: useSummary(range, CLAUDE_SOURCE).data,
-    codex: useSummary(range, CODEX_SOURCE).data,
+    claude: useSummary(range, CLAUDE_SOURCES).data,
+    codex: useSummary(range, CODEX_SOURCES).data,
   };
 }
 

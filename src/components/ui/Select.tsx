@@ -14,37 +14,51 @@ interface SelectProps {
   className?: string;
 }
 
-export function Select({
-  value,
-  onChange,
-  options,
-  ariaLabel,
-  className = "",
-}: SelectProps) {
+export function Select({ value, onChange, options, ariaLabel, className = "" }: SelectProps) {
   const [open, setOpen] = useState(false);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const popoverRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<globalThis.HTMLButtonElement>(null);
+  const popoverRef = useRef<globalThis.HTMLDivElement>(null);
+  const optionRefs = useRef<Array<globalThis.HTMLButtonElement | null>>([]);
 
   const selected = options.find((o) => o.value === value);
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex((option) => option.value === value)
+  );
+
+  function focusOption(index: number) {
+    optionRefs.current[index]?.focus();
+  }
+
+  function moveOptionFocus(currentIndex: number, offset: number) {
+    if (options.length === 0) return;
+    focusOption((currentIndex + offset + options.length) % options.length);
+  }
 
   useEffect(() => {
     if (!open) return;
-    function handleClick(e: MouseEvent) {
-      const t = e.target as Node;
+    function handleClick(e: globalThis.MouseEvent) {
+      const t = e.target as globalThis.Node;
       if (!buttonRef.current?.contains(t) && !popoverRef.current?.contains(t)) {
         setOpen(false);
       }
     }
-    function handleKey(e: KeyboardEvent) {
+    function handleKey(e: globalThis.KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
     }
-    document.addEventListener("mousedown", handleClick);
-    document.addEventListener("keydown", handleKey);
+    globalThis.document.addEventListener("mousedown", handleClick);
+    globalThis.document.addEventListener("keydown", handleKey);
     return () => {
-      document.removeEventListener("mousedown", handleClick);
-      document.removeEventListener("keydown", handleKey);
+      globalThis.document.removeEventListener("mousedown", handleClick);
+      globalThis.document.removeEventListener("keydown", handleKey);
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const frame = globalThis.requestAnimationFrame(() => focusOption(selectedIndex));
+    return () => globalThis.cancelAnimationFrame(frame);
+  }, [open, selectedIndex]);
 
   return (
     <div className={`relative inline-block ${className}`}>
@@ -52,6 +66,16 @@ export function Select({
         ref={buttonRef}
         type="button"
         onClick={() => setOpen((o) => !o)}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+          event.preventDefault();
+          if (options.length === 0) return;
+          setOpen(true);
+          const offset = event.key === "ArrowDown" ? 0 : -1;
+          globalThis.requestAnimationFrame(() =>
+            focusOption((selectedIndex + offset + options.length) % options.length)
+          );
+        }}
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -86,28 +110,48 @@ export function Select({
           boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
         }}
       >
-        {options.map((opt) => {
-            const active = opt.value === value;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                role="option"
-                aria-selected={active}
-                onClick={() => {
-                  onChange(opt.value);
+        {options.map((opt, index) => {
+          const active = opt.value === value;
+          return (
+            <button
+              key={opt.value}
+              ref={(element) => {
+                optionRefs.current[index] = element;
+              }}
+              type="button"
+              role="option"
+              aria-selected={active}
+              tabIndex={active ? 0 : -1}
+              onClick={() => {
+                onChange(opt.value);
+                setOpen(false);
+                buttonRef.current?.focus();
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  moveOptionFocus(index, event.key === "ArrowDown" ? 1 : -1);
+                } else if (event.key === "Home" || event.key === "End") {
+                  event.preventDefault();
+                  focusOption(event.key === "Home" ? 0 : options.length - 1);
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
                   setOpen(false);
-                }}
-                className={`block w-full text-left px-3 py-2 text-[12px] font-medium whitespace-nowrap transition-colors ${
-                  active
-                    ? "bg-azure-soft text-azure-bright"
-                    : "text-text-secondary hover:text-text-primary hover:bg-surface-3"
-                }`}
-              >
-                {opt.label}
-              </button>
-            );
-          })}
+                  buttonRef.current?.focus();
+                } else if (event.key === "Tab") {
+                  setOpen(false);
+                }
+              }}
+              className={`block w-full text-left px-3 py-2 text-[12px] font-medium whitespace-nowrap transition-colors ${
+                active
+                  ? "bg-azure-soft text-azure-bright"
+                  : "text-text-secondary hover:text-text-primary hover:bg-surface-3"
+              }`}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
       </DropdownPortal>
     </div>
   );

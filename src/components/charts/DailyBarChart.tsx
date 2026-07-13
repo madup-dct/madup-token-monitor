@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { niceTickStep } from "./chart-utils";
 import { formatTokensCompact, formatUSD } from "@/lib/format";
 import { tickY } from "@/lib/usage-math";
 
@@ -88,14 +89,12 @@ export function DailyBarChart({
       <g stroke="rgba(255,255,255,0.05)" strokeWidth={1}>
         {ticks.map((t, i) => {
           const y = tickY(t, maxVal, PAD_TOP, innerH);
-          return (
-            <line key={i} x1={Y_AXIS_W} y1={y} x2={CHART_W} y2={y} />
-          );
+          return <line key={i} x1={Y_AXIS_W} y1={y} x2={CHART_W} y2={y} />;
         })}
       </g>
 
       {/* y-axis labels */}
-      <g fill="#454E6A" fontSize="10" fontFamily="JetBrains Mono, monospace">
+      <g fill="var(--color-text-secondary)" fontSize="10" fontFamily="JetBrains Mono, monospace">
         {ticks.map((t, i) => {
           const y = tickY(t, maxVal, PAD_TOP, innerH);
           return (
@@ -130,7 +129,9 @@ export function DailyBarChart({
                 <text
                   x={x + barW / 2}
                   // 평균 점선과 세로로 겹치면 선 위로 피신 — 라벨이 점선에 얹혀 읽기 어려운 것 방지.
-                  y={avgValue > 0 && Math.abs(y - 6 - avgY) < 11 ? Math.min(y - 6, avgY - 11) : y - 6}
+                  y={
+                    avgValue > 0 && Math.abs(y - 6 - avgY) < 11 ? Math.min(y - 6, avgY - 11) : y - 6
+                  }
                   textAnchor="middle"
                   fontSize="10"
                   fontFamily="JetBrains Mono, monospace"
@@ -156,7 +157,7 @@ export function DailyBarChart({
       />
 
       {/* x-axis labels — 라벨이 많으면 매 N 번째만 노출 (마지막=오늘 항상) */}
-      <g fill="#6A7593" fontSize="10.5" fontFamily="JetBrains Mono, monospace">
+      <g fill="var(--color-text-secondary)" fontSize="10.5" fontFamily="JetBrains Mono, monospace">
         {(() => {
           // 평균 라벨 폭 ~ 36px 기준. colW 가 그보다 작으면 thin-out.
           const step = Math.max(1, Math.ceil(36 / Math.max(colW, 1)));
@@ -171,7 +172,7 @@ export function DailyBarChart({
                 x={x}
                 y={CHART_H - 8}
                 textAnchor="middle"
-                fill={isToday ? "#B68CFF" : "#6A7593"}
+                fill={isToday ? "#B68CFF" : "var(--color-text-secondary)"}
                 fontWeight={isToday ? 600 : 400}
                 fontFamily={isToday ? "Pretendard, sans-serif" : "JetBrains Mono, monospace"}
               >
@@ -228,19 +229,4 @@ export function DailyBarChart({
       )}
     </svg>
   );
-}
-
-export function niceTickStep(roughStep: number): number {
-  if (roughStep <= 0) return 1;
-  const exp = Math.floor(Math.log10(roughStep));
-  const base = Math.pow(10, exp);
-  const m = roughStep / base;
-  // 1, 2, 2.5, 5, 10
-  let nice;
-  if (m < 1.5) nice = 1;
-  else if (m < 2.25) nice = 2;
-  else if (m < 3.5) nice = 2.5;
-  else if (m < 7.5) nice = 5;
-  else nice = 10;
-  return nice * base;
 }

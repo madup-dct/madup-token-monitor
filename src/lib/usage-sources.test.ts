@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Summary } from "@/types/models";
 import {
   isUsageScope,
+  matchesUsageScope,
   mergeDayCounts,
   mergeSummaries,
   selectForScope,
@@ -53,13 +54,28 @@ const CODEX_SUMMARY: Summary = {
 };
 
 describe("sourcesForScope", () => {
-  it("통합은 Claude와 Codex만 포함한다", () => {
-    expect(sourcesForScope("combined")).toEqual(["claude", "codex"]);
+  it("통합은 legacy Claude를 포함한 Claude 계열과 Codex만 포함한다", () => {
+    expect(sourcesForScope("combined")).toEqual(["claude", "claude-code", "codex"]);
   });
 
-  it("개별 scope는 해당 source 하나만 포함한다", () => {
-    expect(sourcesForScope("claude")).toEqual(["claude"]);
+  it("개별 scope는 해당 provider 계열만 포함한다", () => {
+    expect(sourcesForScope("claude")).toEqual(["claude", "claude-code"]);
     expect(sourcesForScope("codex")).toEqual(["codex"]);
+  });
+});
+
+describe("matchesUsageScope", () => {
+  it("통합은 Claude 계열과 Codex만 포함한다", () => {
+    expect(
+      ["claude", "claude-code", "codex"].every((source) => matchesUsageScope(source, "combined"))
+    ).toBe(true);
+    expect(matchesUsageScope("opencode", "combined")).toBe(false);
+  });
+
+  it("개별 scope는 해당 provider 계열만 포함한다", () => {
+    expect(matchesUsageScope("claude-code", "claude")).toBe(true);
+    expect(matchesUsageScope("codex", "claude")).toBe(false);
+    expect(matchesUsageScope("codex", "codex")).toBe(true);
   });
 });
 

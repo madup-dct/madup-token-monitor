@@ -317,14 +317,14 @@ components:
     backgroundColor: "{colors.surface-2}"
     textColor: "{colors.text-secondary}"
     rounded: "{rounded.md}"
-    height: 30px
+    height: 32px
     padding: "0 {spacing.sm}"
   segmented-control:
     backgroundColor: "{colors.surface-2}"
     textColor: "{colors.text-secondary}"
     typography: "{typography.button-sm}"
     rounded: "{rounded.md}"
-    height: 28px
+    height: 38px
   segmented-control-active:
     backgroundColor: "{colors.azure}"
     textColor: "{colors.text-on-accent}"
@@ -334,14 +334,14 @@ components:
     textColor: "{colors.text-primary}"
     typography: "{typography.button-sm}"
     rounded: "{rounded.md}"
-    height: 30px
+    height: 32px
     padding: "2px {spacing.xxs}"
   select-pill:
     backgroundColor: "{colors.surface-2}"
     textColor: "{colors.text-primary}"
     typography: "{typography.body-md}"
     rounded: "{rounded.md}"
-    height: 30px
+    height: 32px
     padding: "0 {spacing.md}"
   data-row:
     backgroundColor: "transparent"
@@ -351,7 +351,9 @@ components:
   heatmap-cell:
     backgroundColor: "{colors.surface-2}"
     rounded: "{rounded.xs}"
-    size: 12px
+    size: 16px
+    gap: 4px
+    interactive: false
   sparkline:
     strokeColor: "{colors.azure}"
     strokeWidth: 1.5
@@ -554,19 +556,20 @@ The two-tier philosophy is the same as any modern dashboard: **interactive eleme
 - Used for: title-bar Settings / Sign-out triggers, card-header overflow menus
 
 **`icon-button`** — compact icon affordance
-- Background `{colors.surface-2}`, text `{colors.text-secondary}`, rounded `{rounded.md}`, height 30px
+- Background `{colors.surface-2}`, text `{colors.text-secondary}`, rounded `{rounded.md}`, height 32px
 - Used for: refresh / overflow / filter triggers on card headers
 
 ### Segmented Controls & Pills
 
 **`segmented-control`** + **`segmented-control-active`** — the inline filter group
-- Default: background `{colors.surface-2}`, text `{colors.text-secondary}`, height 28px, rounded `{rounded.md}`, padding 0 around two-to-four 2-padded child buttons
+- Default: background `{colors.surface-2}`, text `{colors.text-secondary}`, height 38px, rounded `{rounded.md}`, padding 0 around two-to-four child buttons with 32px minimum height
 - Active option: background `{colors.azure}`, text `{colors.text-on-accent}`, inner-rounded `{rounded.sm}` to nest inside the outer track
 - Used for: Tokens/Cost toggle, Chart/List toggle, granularity (Daily/Weekly/Monthly)
 
 **`source-carousel`** — the global token-source selector
 - Three manually controlled faces in the fixed order `통합` → `Claude` → `Codex`; `통합` means exactly Claude + Codex and never includes future providers implicitly
 - Header control uses previous/next icon buttons plus three labeled position dots; the active face name stays visible so every downstream token value has an explicit source context
+- Arrow and dot buttons keep non-overlapping 32 × 32px targets and sit edge-to-edge, avoiding extra gaps that make the compact control feel disconnected
 - The quota/summary card body uses a horizontal slide (`500ms`, `ease-out`) so the outgoing and incoming source remain visible throughout the transition, while all token-related dashboard values update from the same persisted selection
 - No automatic rotation. A data source must never change without a user action
 - `Claude` shows OAuth 5h/7d limits when available. `Codex` shows the latest account `rate_limits.used_percent` recorded in Codex rollout events, including each window and model-specific limit. A window whose reset time has passed is labeled `갱신 대기` instead of displaying the stale percentage
@@ -575,7 +578,7 @@ The two-tier philosophy is the same as any modern dashboard: **interactive eleme
 - Reduced motion: replace the slide with the existing cross-fade fallback and retain the same content order
 
 **`select-pill`** — dropdown filter
-- Background `{colors.surface-2}`, text `{colors.text-primary}`, rounded `{rounded.md}`, height 30px, padding 0 12px, with a 10px caret on the right
+- Background `{colors.surface-2}`, text `{colors.text-primary}`, rounded `{rounded.md}`, height 32px, padding 0 12px, with a 10px caret on the right
 
 **`stat-pill`** — a numeric chip sitting next to a label
 - Background `{colors.surface-2}`, text `{colors.text-primary}`, rounded `{rounded.sm}`, padding 3px 8px, type `{typography.numeric-sm}`
@@ -643,7 +646,8 @@ Cost KPIs swap the azure numeral for `{colors.amber}`. Session-count KPIs swap t
 - Stays in the system because it expresses pacing-in-time (this many ticks remain) better than a continuous bar
 
 **`heatmap-cell`** — activity heatmap unit
-- 12 × 12px squares, `{rounded.xs}` corners, 3px gap between cells
+- Non-interactive 16 × 16px data marks with `{rounded.xs}` corners and a 4px gap between cells
+- Each date exposes an accessible graphic label and a hover tooltip; heatmap marks do not behave like action buttons
 - Five-step ramp from `{colors.surface-2}` (empty) → `{colors.azure-deep}` (1) → `{colors.azure}` (2) → `{colors.azure-bright}` (3) → `{colors.violet}` (4, today / current period accent only)
 
 ### Data Rows
@@ -720,7 +724,7 @@ When the viewport drops below default width, cards collapse in this order:
 
 ### Touch Targets
 
-Every interactive element clears 32 × 32px (this is a mouse-first desktop product; pointer targets are smaller than mobile but not below 32px). Title-bar icons sit at 30px height, segmented-control segments at 28px, nav items at 36px.
+Every interactive element clears 32 × 32px (this is a mouse-first desktop product; pointer targets are smaller than mobile but not below 32px). Title-bar icons and segmented-control segments sit at 32px height, while nav items sit at 36px.
 
 The `source-carousel` remains a single compact row at the 1200px minimum window width. Its arrow buttons keep a 32px hit area even when the visible icon is smaller, and the active source label must not truncate in Korean or English.
 

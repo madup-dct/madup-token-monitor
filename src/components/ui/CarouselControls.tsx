@@ -24,7 +24,7 @@ export function CarouselControls({
   const previousLabel = labels[(activeIndex + count - 1) % count] ?? "이전 항목";
   const nextLabel = labels[(activeIndex + 1) % count] ?? "다음 항목";
   return (
-    <div className={`flex items-center gap-2 shrink-0 ${className ?? ""}`}>
+    <div className={`flex items-center gap-0 shrink-0 ${className ?? ""}`}>
       <button
         type="button"
         onClick={() => onIndexChange((activeIndex + count - 1) % count)}
@@ -45,7 +45,7 @@ export function CarouselControls({
           <path d="M10 3L5 8l5 5" />
         </svg>
       </button>
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-0">
         {Array.from({ length: count }).map((_, i) => (
           <button
             key={i}
@@ -54,7 +54,7 @@ export function CarouselControls({
             aria-label={labels[i] ?? String(i + 1)}
             aria-pressed={i === activeIndex}
             title={labels[i] ?? String(i + 1)}
-            className="w-[18px] h-[26px] grid place-items-center rounded-md"
+            className="w-8 h-8 grid place-items-center rounded-md"
           >
             <span
               className="block w-2 h-2 rounded-full transition-colors"
@@ -94,18 +94,22 @@ export function CarouselControls({
             aria-label={auto ? "자동 넘기기 끄기" : "자동 넘기기 켜기"}
             onClick={() => onAutoChange(!auto)}
             title="자동 넘기기"
-            className="relative w-[34px] h-[20px] rounded-full transition-colors shrink-0 ml-1"
-            style={{ background: auto ? "var(--color-azure)" : "var(--color-surface-3)" }}
+            className="w-[34px] h-8 flex items-center shrink-0 ml-1"
           >
             <span
-              className="absolute top-[2px] left-[2px] w-4 h-4 rounded-full transition-transform"
-              style={{
-                background: auto ? "#fff" : "var(--color-text-secondary)",
-                transform: auto ? "translateX(14px)" : "translateX(0)",
-              }}
-            />
+              className="relative block w-[34px] h-[20px] rounded-full transition-colors"
+              style={{ background: auto ? "var(--color-azure)" : "var(--color-surface-3)" }}
+            >
+              <span
+                className="absolute top-[2px] left-[2px] w-4 h-4 rounded-full transition-transform"
+                style={{
+                  background: auto ? "#fff" : "var(--color-text-secondary)",
+                  transform: auto ? "translateX(14px)" : "translateX(0)",
+                }}
+              />
+            </span>
           </button>
-          <span className="text-[11px] text-text-tertiary whitespace-nowrap">자동</span>
+          <span className="ml-1.5 text-[11px] text-text-tertiary whitespace-nowrap">자동</span>
         </>
       ) : null}
     </div>

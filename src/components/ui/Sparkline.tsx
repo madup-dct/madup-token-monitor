@@ -1,3 +1,5 @@
+import { useId } from "react";
+
 interface SparklineProps {
   values: number[];
   width?: number;
@@ -18,18 +20,16 @@ export function Sparkline({
   fillTo = "rgba(77,163,255,0)",
   className,
 }: SparklineProps) {
+  const gradientId = `spark-fill-${useId().replace(/:/g, "")}`;
+  const padX = 6;
+
   if (values.length < 2) {
     return (
-      <svg
-        width={width}
-        height={height}
-        viewBox={`0 0 ${width} ${height}`}
-        className={className}
-      >
+      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className={className}>
         <line
-          x1={0}
+          x1={padX}
           y1={height / 2}
-          x2={width}
+          x2={width - padX}
           y2={height / 2}
           stroke="var(--color-hairline)"
           strokeWidth={1.5}
@@ -44,10 +44,10 @@ export function Sparkline({
   const padTop = 10;
   const padBot = 12;
   const innerH = height - padTop - padBot;
-  const stepX = values.length > 1 ? width / (values.length - 1) : width;
+  const stepX = values.length > 1 ? (width - padX * 2) / (values.length - 1) : width;
 
   const points = values.map((v, i) => {
-    const x = i * stepX;
+    const x = padX + i * stepX;
     const y = padTop + innerH - ((v - min) / range) * innerH;
     return [x, y] as const;
   });
@@ -55,17 +55,11 @@ export function Sparkline({
   const linePath = points
     .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`)
     .join(" ");
-  const areaPath = `${linePath} L${(points[points.length - 1][0]).toFixed(1)},${height} L0,${height} Z`;
+  const areaPath = `${linePath} L${points[points.length - 1][0].toFixed(1)},${height} L${padX},${height} Z`;
   const lastPoint = points[points.length - 1];
-  const gradientId = `spark-fill-${Math.random().toString(36).slice(2, 8)}`;
 
   return (
-    <svg
-      width={width}
-      height={height}
-      viewBox={`0 0 ${width} ${height}`}
-      className={className}
-    >
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className={className}>
       <defs>
         <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
           <stop offset="0%" stopColor={fillFrom} />

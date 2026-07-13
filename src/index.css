@@ -400,8 +400,8 @@ html.theme-light {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 32px;
   border: 0;
   border-radius: var(--radius-sm);
   background-color: transparent;
@@ -498,7 +498,7 @@ html.theme-light {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 30px;
+  height: 32px;
   padding: 0 12px;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-md);
@@ -535,7 +535,7 @@ html.theme-light {
 @utility mc-segmented {
   display: inline-flex;
   align-items: center;
-  height: 30px;
+  height: 38px;
   padding: 2px;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-md);
@@ -546,7 +546,7 @@ html.theme-light {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 24px;
+  height: 32px;
   padding: 0 12px;
   border: 0;
   border-radius: var(--radius-sm);
@@ -568,7 +568,7 @@ html.theme-light {
 }
 
 .mc-source-carousel-controls {
-  gap: 2px;
+  gap: 0;
   min-height: 32px;
   padding: 0 2px;
   border: 1px solid var(--color-hairline);

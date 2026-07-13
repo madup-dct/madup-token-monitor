@@ -65,7 +65,7 @@ export function UsageSourceCarousel({
         activeIndex={activeIndex}
         onIndexChange={changeIndex}
         auto={false}
-        height={248}
+        height={scope === "combined" ? 180 : 248}
         motion="slide"
         faces={[
           {
@@ -105,7 +105,7 @@ function CombinedUsage({ totals }: { readonly totals: readonly PeriodUsageTotal[
       {totals.map((total, index) => (
         <div
           key={total.label}
-          className={`flex items-center justify-between py-4 gap-4 ${index > 0 ? "border-t border-hairline" : ""}`}
+          className={`flex items-center justify-between py-2 gap-4 ${index > 0 ? "border-t border-hairline" : ""}`}
         >
           <span className="text-[12px] font-semibold text-text-secondary">{total.label}</span>
           <span className="text-right">

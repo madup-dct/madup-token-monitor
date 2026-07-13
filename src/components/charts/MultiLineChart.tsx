@@ -1,20 +1,7 @@
-import { useMemo, useRef, useState } from "react";
-import { niceTickStep } from "./DailyBarChart";
+import { useMemo, useRef, useState, type MouseEvent } from "react";
+import { niceTickStep } from "./chart-utils";
+import type { MultiLineChartProps } from "./multi-line-chart.types";
 import { tickY } from "@/lib/usage-math";
-
-export interface LineSeries {
-  label: string;
-  /// CSS color (var(--color-*) 또는 hex)
-  color: string;
-  points: number[];
-}
-
-interface Props {
-  series: LineSeries[];
-  xLabels: string[];
-  formatValue: (n: number) => string;
-  height?: number;
-}
 
 const CHART_W = 720;
 const Y_AXIS_W = 50;
@@ -24,10 +11,15 @@ const PAD_BOT = 28;
 /// 여러 시리즈(평균/최대/최소)를 같은 시간축에 그리는 라인차트.
 /// - 범례 클릭으로 시리즈 on/off (y축 자동 리스케일)
 /// - 영역 그라데이션 + hover 크로스헤어/툴팁/끝점 dot
-export function MultiLineChart({ series, xLabels, formatValue, height = 280 }: Props) {
+export function MultiLineChart({
+  series,
+  xLabels,
+  formatValue,
+  height = 280,
+}: MultiLineChartProps) {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [hover, setHover] = useState<number | null>(null);
-  const svgRef = useRef<SVGSVGElement>(null);
+  const svgRef = useRef<globalThis.SVGSVGElement>(null);
 
   const n = xLabels.length;
   const visible = series.filter((s) => !hidden.has(s.label));
@@ -53,7 +45,7 @@ export function MultiLineChart({ series, xLabels, formatValue, height = 280 }: P
   const yOf = (v: number) => PAD_TOP + innerH - (v / maxVal) * innerH;
   const labelStep = Math.max(1, Math.ceil(36 / Math.max(colW, 1)));
 
-  function onMove(e: React.MouseEvent<SVGSVGElement>) {
+  function onMove(e: MouseEvent<globalThis.SVGSVGElement>) {
     const el = svgRef.current;
     if (!el || n === 0) return;
     // getScreenCTM 으로 client → viewBox 좌표 정확 변환 (preserveAspectRatio 무관).
@@ -89,7 +81,11 @@ export function MultiLineChart({ series, xLabels, formatValue, height = 280 }: P
   const tipW = 132;
   const tipH = 16 + visible.length * 15;
   const tipX =
-    hover != null && xOf(hover) + 12 + tipW > CHART_W ? xOf(hover) - 12 - tipW : (hover != null ? xOf(hover) + 12 : 0);
+    hover != null && xOf(hover) + 12 + tipW > CHART_W
+      ? xOf(hover) - 12 - tipW
+      : hover != null
+        ? xOf(hover) + 12
+        : 0;
   const tipY = PAD_TOP + 2;
 
   return (
@@ -159,7 +155,7 @@ export function MultiLineChart({ series, xLabels, formatValue, height = 280 }: P
               <text key={i} x={xOf(i)} y={height - 8} textAnchor="middle">
                 {lab}
               </text>
-            ) : null,
+            ) : null
           )}
         </g>
 
@@ -242,9 +238,7 @@ export function MultiLineChart({ series, xLabels, formatValue, height = 280 }: P
               onClick={() => toggle(s.label)}
               aria-pressed={!off}
               className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md border transition-colors ${
-                off
-                  ? "border-transparent opacity-45"
-                  : "border-hairline bg-surface-2"
+                off ? "border-transparent opacity-45" : "border-hairline bg-surface-2"
               }`}
             >
               <span

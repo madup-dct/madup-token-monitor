@@ -1,17 +1,11 @@
-import {
-  useCallback,
-  useState,
-  type Dispatch,
-  type ReactNode,
-  type SetStateAction,
-} from "react";
+import { useCallback, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { PrismCarousel } from "@/components/ui/PrismCarousel";
 
 /// localStorage 읽기 (key 가 null 이면 메모리 전용 — fallback 반환).
 function readPersisted<T>(key: string | null, fallback: T): T {
   if (!key) return fallback;
   try {
-    const raw = localStorage.getItem(key);
+    const raw = globalThis.localStorage.getItem(key);
     return raw != null ? (JSON.parse(raw) as T) : fallback;
   } catch {
     return fallback;
@@ -22,7 +16,7 @@ function readPersisted<T>(key: string | null, fallback: T): T {
 function writePersisted<T>(key: string | null, value: T): T {
   if (key) {
     try {
-      localStorage.setItem(key, JSON.stringify(value));
+      globalThis.localStorage.setItem(key, JSON.stringify(value));
     } catch {
       /* localStorage 불가 환경 — 메모리 state 로만 동작 */
     }
@@ -35,12 +29,20 @@ function resolve<T>(action: SetStateAction<T>, prev: T): T {
   return typeof action === "function" ? (action as (p: T) => T)(prev) : action;
 }
 
+const DASHBOARD_ACTIVITY_KEY = "madup-token-monitor:view:dash:activity";
+const DASHBOARD_SCOPE_KEY = "madup-token-monitor:view:dash:usageSource";
+const DASHBOARD_SCOPE_LABELS: Record<string, string> = {
+  combined: "통합",
+  claude: "Claude",
+  codex: "Codex",
+};
+
 export interface CarouselFace {
   key: string;
   /// 활성 면일 때 헤더에 표시될 제목 (예: "활동", "MCP 사용량").
   title: string;
   /// 제목 옆 보조 라벨 (예: "최근 8주", "최근 7일"). 면마다 다를 수 있음.
-  subtitle?: string;
+  subtitle?: ReactNode;
   node: ReactNode;
 }
 
@@ -58,42 +60,63 @@ export interface CarouselCardProps {
 /// 헤더(회전 제목 + 이전/점/다음 + 자동토글) + PrismCarousel 을 묶은 공통 carousel 카드.
 /// Dashboard / UserDashboard 의 활동·MCP·플러그인·도구·프로젝트 페이지 넘김 UI 에 사용.
 /// 면 내용(node)은 호출자가 구성 — 카드 chrome 만 공유한다.
-export function CarouselCard({ faces, height = 320, className = "", persistKey }: CarouselCardProps) {
+export function CarouselCard({
+  faces,
+  height = 320,
+  className = "",
+  persistKey,
+}: CarouselCardProps) {
   // persistKey 가 있으면 lazy init 으로 localStorage 에서 마지막 선택을 읽어 깜빡임 없이 복원.
   // 훅 규칙: 항상 동일하게 useState 두 개만 호출하고, persistKey 유무로 초기화/기록만 분기.
   const idxKey = persistKey ? `${persistKey}:idx` : null;
   const autoKey = persistKey ? `${persistKey}:auto` : null;
   const [idx, setIdxRaw] = useState<number>(() => readPersisted(idxKey, 0));
   const [auto, setAutoRaw] = useState<boolean>(() => readPersisted(autoKey, true));
+  const [focusWithin, setFocusWithin] = useState(false);
   const setIdx = useCallback<Dispatch<SetStateAction<number>>>(
     (action) => setIdxRaw((prev) => writePersisted(idxKey, resolve(action, prev))),
-    [idxKey],
+    [idxKey]
   );
   const setAuto = useCallback<Dispatch<SetStateAction<boolean>>>(
     (action) => setAutoRaw((prev) => writePersisted(autoKey, resolve(action, prev))),
-    [autoKey],
+    [autoKey]
   );
   const n = faces.length;
   const active = faces[Math.min(idx, n - 1)];
+  const dashboardScope = readPersisted<string>(DASHBOARD_SCOPE_KEY, "combined");
+  const dashboardScopeLabel = DASHBOARD_SCOPE_LABELS[dashboardScope] ?? "통합";
+  const activeSubtitle =
+    persistKey === DASHBOARD_ACTIVITY_KEY && active?.subtitle
+      ? active.key === "heatmap"
+        ? `${dashboardScopeLabel} · ${String(active.subtitle)}`
+        : `${String(active.subtitle)} · Claude`
+      : active?.subtitle;
 
   return (
-    <section className={`mc-card ${className}`}>
-      <header className="flex items-center justify-between mb-3.5 gap-3 relative">
-        <span className="text-[15px] font-semibold text-text-primary tracking-[-0.005em]">
-          {active?.title}
-          {active?.subtitle ? (
-            <span className="text-text-tertiary font-normal text-[12px] ml-1">
-              {active.subtitle}
+    <section
+      className={`mc-card ${className}`}
+      onFocusCapture={() => setFocusWithin(true)}
+      onBlurCapture={(event) => {
+        const next = event.relatedTarget as globalThis.Node | null;
+        if (!event.currentTarget.contains(next)) setFocusWithin(false);
+      }}
+    >
+      <header className="flex items-center justify-between mb-3.5 gap-2 relative flex-wrap">
+        <span className="flex items-baseline gap-1 min-w-0 text-[15px] font-semibold text-text-primary tracking-[-0.005em]">
+          <span className="whitespace-nowrap">{active?.title}</span>
+          {activeSubtitle ? (
+            <span className="text-text-tertiary font-normal text-[12px] whitespace-nowrap">
+              {activeSubtitle}
             </span>
           ) : null}
         </span>
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-0 shrink-0">
           <button
             type="button"
             onClick={() => setIdx((i) => (i + n - 1) % n)}
             aria-label="이전"
             title="이전"
-            className="mc-icon-btn"
+            className="mc-icon-btn !w-8 !h-8"
           >
             <svg
               width="13"
@@ -108,18 +131,23 @@ export function CarouselCard({ faces, height = 320, className = "", persistKey }
               <path d="M10 3L5 8l5 5" />
             </svg>
           </button>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center">
             {faces.map((f, i) => (
               <button
                 key={f.key}
                 type="button"
                 onClick={() => setIdx(i)}
                 aria-label={f.title}
-                className="w-2 h-2 rounded-full transition-colors"
-                style={{
-                  background: i === idx ? "var(--color-azure)" : "var(--color-surface-3)",
-                }}
-              />
+                aria-current={i === idx ? "true" : undefined}
+                className="w-8 h-8 flex items-center justify-center rounded-full"
+              >
+                <span
+                  className="w-2 h-2 rounded-full transition-colors"
+                  style={{
+                    background: i === idx ? "var(--color-azure)" : "var(--color-surface-3)",
+                  }}
+                />
+              </button>
             ))}
           </div>
           <button
@@ -127,7 +155,7 @@ export function CarouselCard({ faces, height = 320, className = "", persistKey }
             onClick={() => setIdx((i) => (i + 1) % n)}
             aria-label="다음"
             title="다음"
-            className="mc-icon-btn"
+            className="mc-icon-btn !w-8 !h-8"
           >
             <svg
               width="13"
@@ -146,18 +174,22 @@ export function CarouselCard({ faces, height = 320, className = "", persistKey }
             type="button"
             role="switch"
             aria-checked={auto}
+            aria-label="자동 넘기기"
             onClick={() => setAuto((v) => !v)}
             title="자동 넘기기"
-            className="relative w-[34px] h-[20px] rounded-full transition-colors shrink-0 ml-1"
-            style={{
-              background: auto ? "var(--color-azure)" : "var(--color-surface-3)",
-            }}
+            className="relative w-[38px] h-8 shrink-0 ml-1 flex items-center justify-center"
           >
             <span
-              className="absolute top-[2px] left-[2px] w-4 h-4 rounded-full transition-transform"
+              className="absolute w-[34px] h-[20px] rounded-full transition-colors"
+              style={{
+                background: auto ? "var(--color-azure)" : "var(--color-surface-3)",
+              }}
+            />
+            <span
+              className="absolute w-4 h-4 rounded-full transition-transform"
               style={{
                 background: auto ? "#fff" : "var(--color-text-secondary)",
-                transform: auto ? "translateX(14px)" : "translateX(0)",
+                transform: auto ? "translateX(7px)" : "translateX(-7px)",
               }}
             />
           </button>
@@ -168,6 +200,7 @@ export function CarouselCard({ faces, height = 320, className = "", persistKey }
         activeIndex={idx}
         onIndexChange={setIdx}
         auto={auto}
+        paused={focusWithin}
         intervalMs={5000}
         height={height}
         faces={faces.map((f) => ({ key: f.key, node: f.node }))}

@@ -27,6 +27,7 @@ export interface PeriodChartCardProps {
   onCopy?: () => void;
   emptyText?: string;
   colSpan?: 8 | 12;
+  className?: string;
   /// 차트 타입. 'auto' (기본): rows.length > 45 면 line, 아니면 bar.
   /// 명시적으로 'bar' / 'line' 지정 가능.
   chartType?: "auto" | "bar" | "line";
@@ -46,6 +47,7 @@ export function PeriodChartCard({
   onCopy,
   emptyText = "기록 없음",
   colSpan = 8,
+  className = "",
   chartType = "auto",
 }: PeriodChartCardProps) {
   const labeled = rows.map((r, i) => ({
@@ -58,7 +60,7 @@ export function PeriodChartCard({
     chartType === "auto" ? (rows.length > 45 ? "line" : "bar") : chartType;
 
   return (
-    <section className={`mc-card ${colSpan === 12 ? "col-span-12" : "col-span-8"}`}>
+    <section className={`mc-card ${colSpan === 12 ? "col-span-12" : "col-span-8"} ${className}`}>
       <header className="flex items-center justify-between mb-3.5 gap-3 relative flex-wrap">
         {/* leftHeader 도 wrap — 컨트롤이 많은 페이지(캐러셀+Select)에서 좁은 폭일 때
             한 줄 과밀로 깨지는 대신 자연스럽게 줄바꿈 */}
@@ -150,10 +152,18 @@ export function PeriodChartCard({
         </div>
         {onCopy ? (
           <button
+            type="button"
             onClick={onCopy}
-            className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-hairline bg-surface-2 text-text-secondary text-[11.5px] font-medium hover:text-text-primary hover:border-hairline-strong transition-colors"
+            className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-md border border-hairline bg-surface-2 text-text-secondary text-[11.5px] font-medium hover:text-text-primary hover:border-hairline-strong transition-colors"
           >
-            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6">
+            <svg
+              width="11"
+              height="11"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+            >
               <rect x="2" y="2" width="9" height="9" rx="1" />
               <path d="M5 5h6v6" />
             </svg>
@@ -164,4 +174,3 @@ export function PeriodChartCard({
     </section>
   );
 }
-

@@ -7,7 +7,7 @@ export const USAGE_SCOPE_OPTIONS = [
 ] as const;
 
 export type UsageScope = (typeof USAGE_SCOPE_OPTIONS)[number]["value"];
-export type UsageSource = Exclude<UsageScope, "combined">;
+export type UsageSource = "claude" | "claude-code" | "codex";
 
 export function isUsageScope(value: unknown): value is UsageScope {
   return USAGE_SCOPE_OPTIONS.some((option) => option.value === value);
@@ -21,14 +21,24 @@ export interface SourcePair<T> {
 export function sourcesForScope(scope: UsageScope): readonly UsageSource[] {
   switch (scope) {
     case "combined":
-      return ["claude", "codex"];
+      return ["claude", "claude-code", "codex"];
     case "claude":
-      return ["claude"];
+      return ["claude", "claude-code"];
     case "codex":
       return ["codex"];
     default:
       return assertNever(scope);
   }
+}
+
+export function matchesUsageScope(source: string, scope: UsageScope): boolean {
+  const provider =
+    source === "codex"
+      ? "codex"
+      : source === "claude" || source === "claude-code"
+        ? "claude"
+        : null;
+  return provider !== null && (scope === "combined" || provider === scope);
 }
 
 export function selectForScope<T>(

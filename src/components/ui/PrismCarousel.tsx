@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type FocusEvent, type ReactNode } from "react";
 
 interface PrismFace {
   key: string;
@@ -21,7 +21,8 @@ interface PrismCarouselProps {
 
 function prefersReducedMotion(): boolean {
   return (
-    typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    typeof globalThis.window !== "undefined" &&
+    globalThis.window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
   );
 }
 
@@ -38,15 +39,21 @@ export function PrismCarousel({
   motion = "prism",
 }: PrismCarouselProps) {
   const [hover, setHover] = useState(false);
+  const [focusWithin, setFocusWithin] = useState(false);
   const reduced = prefersReducedMotion();
   const n = faces.length;
   useEffect(() => {
-    if (!auto || paused || hover || faces.length <= 1) return;
-    const id = window.setInterval(() => {
+    if (!auto || paused || hover || focusWithin || faces.length <= 1) return;
+    const id = globalThis.window.setInterval(() => {
       onIndexChange((activeIndex + 1) % faces.length);
     }, intervalMs);
-    return () => window.clearInterval(id);
-  }, [activeIndex, auto, paused, hover, faces.length, intervalMs, onIndexChange]);
+    return () => globalThis.window.clearInterval(id);
+  }, [activeIndex, auto, paused, hover, focusWithin, faces.length, intervalMs, onIndexChange]);
+
+  function handleBlur(event: FocusEvent<globalThis.HTMLDivElement>) {
+    const next = event.relatedTarget as globalThis.Node | null;
+    if (!event.currentTarget.contains(next)) setFocusWithin(false);
+  }
 
   // 면 각도: 3면이면 120°씩. translateZ 반지름은 컨테이너 폭 추정으로 충분히 큰 값.
   const stepDeg = 360 / Math.max(1, n);
@@ -60,11 +67,14 @@ export function PrismCarousel({
         style={{ height }}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
+        onFocusCapture={() => setFocusWithin(true)}
+        onBlurCapture={handleBlur}
       >
         {faces.map((f, i) => (
           <div
             key={f.key}
             aria-hidden={i !== activeIndex}
+            inert={i !== activeIndex}
             className="absolute inset-0 overflow-y-auto transition-opacity duration-300"
             style={{
               opacity: i === activeIndex ? 1 : 0,
@@ -85,6 +95,8 @@ export function PrismCarousel({
         style={{ height }}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
+        onFocusCapture={() => setFocusWithin(true)}
+        onBlurCapture={handleBlur}
       >
         {faces.map((face, index) => {
           const rawOffset = index - activeIndex;
@@ -94,6 +106,7 @@ export function PrismCarousel({
             <div
               key={face.key}
               aria-hidden={index !== activeIndex}
+              inert={index !== activeIndex}
               className="absolute inset-0 overflow-y-auto transition-[transform,opacity] duration-500 ease-out"
               style={{
                 transform: `translateX(${offset * 100}%)`,
@@ -114,6 +127,8 @@ export function PrismCarousel({
       style={{ height, perspective: "1600px" }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      onFocusCapture={() => setFocusWithin(true)}
+      onBlurCapture={handleBlur}
     >
       <div
         className="relative w-full h-full"
@@ -127,6 +142,7 @@ export function PrismCarousel({
           <div
             key={f.key}
             aria-hidden={i !== activeIndex}
+            inert={i !== activeIndex}
             className="absolute inset-0 overflow-y-auto"
             style={{
               transform: `rotateY(${i * stepDeg}deg) translateZ(${radius}px)`,

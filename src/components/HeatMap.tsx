@@ -4,9 +4,12 @@ import { formatUSD } from "@/lib/format";
 interface Props {
   data: DayCount[];
   weeks?: number;
+  unitLabel?: string;
 }
 
 const DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"] as const;
+const DAY_MS = 86_400_000;
+const KST_OFFSET_MS = 9 * 3_600_000;
 
 /// 5단계 azure 램프 + 오늘 셀은 violet 강조.
 function levelClass(count: number, max: number): string {
@@ -23,23 +26,19 @@ function levelClass(count: number, max: number): string {
 /// (투명 padding 아님, surface-2 셀 + "0건" tooltip). 월요일 정렬용 head/tail
 /// padding 만 null(투명).
 function buildMatrix(data: DayCount[], weeks: number) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const todayKey = localKey(today);
+  const todayKey = kstDateKey(Date.now());
   const totalDays = weeks * 7;
   const byDate = new Map(data.map((d) => [d.date, d]));
 
   const series: DayCount[] = [];
   for (let i = totalDays - 1; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(today.getDate() - i);
-    const key = localKey(d);
+    const key = shiftedDateKey(todayKey, -i);
     series.push(byDate.get(key) ?? { date: key, count: 0, cost_usd: 0 });
   }
 
   // 첫 날짜 요일에 맞춰 앞쪽 padding (월요일 시작) — 진짜 grid 공백만 null.
-  const first = new Date(series[0].date + "T00:00:00");
-  const headPad = (first.getDay() + 6) % 7; // Mon=0
+  const first = new Date(`${series[0].date}T00:00:00Z`);
+  const headPad = (first.getUTCDay() + 6) % 7; // Mon=0
   const padded: (DayCount | null)[] = Array(headPad).fill(null).concat(series);
   while (padded.length % 7 !== 0) padded.push(null);
 
@@ -51,34 +50,41 @@ function buildMatrix(data: DayCount[], weeks: number) {
   const maxLen = Math.max(...rows.map((r) => r.length));
   for (const r of rows) while (r.length < maxLen) r.push(null);
 
-  return { rows, todayKey };
+  return { rows, series, todayKey };
 }
 
-function localKey(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
+function kstDateKey(timestamp: number): string {
+  const date = new Date(timestamp + KST_OFFSET_MS);
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
 
-export function HeatMap({ data, weeks = 8 }: Props) {
-  const { rows, todayKey } = buildMatrix(data, weeks);
-  const max = Math.max(...data.map((d) => d.count), 1);
+function shiftedDateKey(dateKey: string, days: number): string {
+  return kstDateKey(Date.parse(`${dateKey}T00:00:00+09:00`) + days * DAY_MS);
+}
+
+export function HeatMap({ data, weeks = 8, unitLabel = "건" }: Props) {
+  const { rows, series, todayKey } = buildMatrix(data, weeks);
+  const max = Math.max(...series.map((d) => d.count), 1);
 
   // Week column labels = 첫 셀의 날짜의 day-of-month.
-  const weekLabels: string[] = [];
+  const weekLabels: { key: string; label: string }[] = [];
   if (rows[0].length > 0) {
     for (let w = 0; w < rows[0].length; w++) {
       // 그 주의 첫 non-null 셀의 날짜를 사용
       let label = "";
+      let key = `week-${w}`;
       for (let d = 0; d < 7; d++) {
         const cell = rows[d][w];
         if (cell) {
-          label = String(new Date(cell.date + "T00:00:00").getDate());
+          label = String(Number(cell.date.slice(8, 10)));
+          key = cell.date;
           break;
         }
       }
-      weekLabels.push(label);
+      weekLabels.push({ key, label });
     }
   }
 
@@ -87,25 +93,32 @@ export function HeatMap({ data, weeks = 8 }: Props) {
       {/* 7 day-rows */}
       {rows.map((row, di) => (
         <div key={di} className="flex gap-1 items-center">
-          <span className="w-[22px] text-right text-[10px] text-text-faint shrink-0">
+          <span className="w-[22px] text-right text-[10px] text-text-secondary shrink-0">
             {di % 2 === 0 ? DAY_LABELS[di] : ""}
           </span>
           {row.map((cell, wi) => {
             const isToday = cell?.date === todayKey;
+            const tooltipPosition =
+              wi < 2 ? "left-0" : wi >= row.length - 2 ? "right-0" : "left-1/2 -translate-x-1/2";
+            const tooltipVertical = di < 2 ? "top-full mt-1" : "bottom-full mb-1";
             return cell ? (
-              <div key={wi} className="relative group">
-                <div
-                  className={`w-4 h-4 rounded-[4px] border border-[rgba(255,255,255,0.02)] ${
+              <div key={wi} className="relative group w-4 h-4">
+                <span
+                  role="img"
+                  aria-label={`${cell.date}, ${cell.count.toLocaleString("ko-KR")} ${unitLabel}, ${formatUSD(cell.cost_usd)}`}
+                  className={`block w-4 h-4 rounded-[4px] border border-[rgba(255,255,255,0.02)] ${
                     isToday
                       ? "bg-violet shadow-[0_0_8px_rgba(182,140,255,0.45)]"
                       : levelClass(cell.count, max)
                   }`}
                 />
-                <div className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-10 pointer-events-none">
+                <div
+                  className={`hidden group-hover:block absolute ${tooltipVertical} ${tooltipPosition} z-10 pointer-events-none`}
+                >
                   <div className="bg-surface-2 border border-hairline-strong rounded-md px-2 py-1 text-[11px] whitespace-nowrap shadow-lg">
                     <div className="num font-medium text-text-primary">{cell.date}</div>
                     <div className="text-text-tertiary num">
-                      {cell.count}건 · {formatUSD(cell.cost_usd)}
+                      {cell.count.toLocaleString("ko-KR")} {unitLabel} · {formatUSD(cell.cost_usd)}
                     </div>
                   </div>
                 </div>
@@ -119,12 +132,9 @@ export function HeatMap({ data, weeks = 8 }: Props) {
 
       {/* Week labels (day-of-month) */}
       <div className="flex gap-1 mt-1.5 ml-[26px]">
-        {weekLabels.map((l, i) => (
-          <span
-            key={i}
-            className="w-4 text-center num text-[9.5px] text-text-faint"
-          >
-            {l}
+        {weekLabels.map(({ key, label }) => (
+          <span key={key} className="w-4 text-center num text-[9.5px] text-text-secondary">
+            {label}
           </span>
         ))}
       </div>

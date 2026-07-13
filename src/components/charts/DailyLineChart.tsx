@@ -1,6 +1,6 @@
 import { useMemo } from "react";
+import { niceTickStep } from "./chart-utils";
 import { formatTokensCompact, formatUSD } from "@/lib/format";
-import { niceTickStep } from "./DailyBarChart";
 import { tickY } from "@/lib/usage-math";
 
 interface LineRow {
@@ -19,6 +19,7 @@ interface Props {
 const CHART_W = 720;
 const CHART_H = 280;
 const Y_AXIS_W = 50;
+const PAD_RIGHT = 14;
 const PAD_TOP = 16;
 const PAD_BOT = 28;
 
@@ -52,7 +53,7 @@ export function DailyLineChart({
     );
   }
 
-  const innerW = CHART_W - Y_AXIS_W;
+  const innerW = CHART_W - Y_AXIS_W - PAD_RIGHT;
   const innerH = CHART_H - PAD_TOP - PAD_BOT;
   const colW = innerW / Math.max(rows.length - 1, 1);
   const avgValue = avg ?? computedAvg;
@@ -71,7 +72,9 @@ export function DailyLineChart({
     };
   });
 
-  const linePath = points.map((p, i) => (i === 0 ? `M ${p.x} ${p.y}` : `L ${p.x} ${p.y}`)).join(" ");
+  const linePath = points
+    .map((p, i) => (i === 0 ? `M ${p.x} ${p.y}` : `L ${p.x} ${p.y}`))
+    .join(" ");
   const areaPath = `${linePath} L ${points[points.length - 1]!.x} ${PAD_TOP + innerH} L ${points[0]!.x} ${PAD_TOP + innerH} Z`;
 
   return (
@@ -93,12 +96,12 @@ export function DailyLineChart({
       <g stroke="rgba(255,255,255,0.05)" strokeWidth={1}>
         {ticks.map((t, i) => {
           const y = tickY(t, maxVal, PAD_TOP, innerH);
-          return <line key={i} x1={Y_AXIS_W} y1={y} x2={CHART_W} y2={y} />;
+          return <line key={i} x1={Y_AXIS_W} y1={y} x2={CHART_W - PAD_RIGHT} y2={y} />;
         })}
       </g>
 
       {/* y-axis labels */}
-      <g fill="#454E6A" fontSize="10" fontFamily="JetBrains Mono, monospace">
+      <g fill="var(--color-text-secondary)" fontSize="10" fontFamily="JetBrains Mono, monospace">
         {ticks.map((t, i) => {
           const y = tickY(t, maxVal, PAD_TOP, innerH);
           return (
@@ -131,7 +134,7 @@ export function DailyLineChart({
           if (!showDot) return null;
           return (
             <circle
-              key={`d-${i}`}
+              key={`d-${p.date}`}
               cx={p.x}
               cy={p.y}
               r={isToday ? 4 : 2.5}
@@ -144,7 +147,7 @@ export function DailyLineChart({
       })()}
 
       {/* x-axis labels — 매 N 번째 (오늘 항상) */}
-      <g fill="#6A7593" fontSize="10.5" fontFamily="JetBrains Mono, monospace">
+      <g fill="var(--color-text-secondary)" fontSize="10.5" fontFamily="JetBrains Mono, monospace">
         {(() => {
           const step = Math.max(1, Math.ceil(36 / Math.max(colW, 1)));
           return points.map((p, i) => {
@@ -153,11 +156,11 @@ export function DailyLineChart({
             if (!showLabel) return null;
             return (
               <text
-                key={`x-${i}`}
+                key={`x-${p.date}`}
                 x={p.x}
                 y={CHART_H - 8}
                 textAnchor="middle"
-                fill={isToday ? "#B68CFF" : "#6A7593"}
+                fill={isToday ? "#B68CFF" : "var(--color-text-secondary)"}
                 fontWeight={isToday ? 600 : 400}
                 fontFamily={isToday ? "Pretendard, sans-serif" : "JetBrains Mono, monospace"}
               >
@@ -174,7 +177,7 @@ export function DailyLineChart({
           <line
             x1={Y_AXIS_W}
             y1={avgY}
-            x2={CHART_W}
+            x2={CHART_W - PAD_RIGHT}
             y2={avgY}
             stroke="#F5B544"
             strokeWidth={1.2}
@@ -182,7 +185,7 @@ export function DailyLineChart({
             opacity={0.85}
           />
           <text
-            x={CHART_W - 8}
+            x={CHART_W - PAD_RIGHT - 8}
             y={avgY - 4}
             textAnchor="end"
             fontSize="9.5"

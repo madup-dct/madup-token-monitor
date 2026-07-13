@@ -19,7 +19,7 @@
 3. **각 기기는 자기 로컬 전체 합만 올림.** `read_usage_aggregates`(`aggregator.rs:83-138`)는 그 기기 `usage_events` 전체를 `(date,source)` 합산. → 기기 A(100M) 후 기기 B(30M) 업로드 시 같은 PK 충돌 → **130M 이어야 할 게 30M 으로 손실.**
 4. **DB 증거.** skpark 6/4 `usage_hourly` raw(input+output)=1,079,317 인데 `usage_aggregates` total=652,162 로 역전 (aggregates 가 cache 토큰 포함인데도 작음 → 6/4 행이 더 가벼운 기기 값으로 덮인 정황).
 
-영향: 5개 테이블 전부(`usage_aggregates`/`usage_hourly`/`mcp_usage`/`plugin_usage`/`tool_usage`). 본인 Dashboard(`useUsage.ts:113` 1차 aggregates, 실패 시 로컬 단일기기) + 관리자 UserDashboard(`teams.ts:174` 100% aggregates, 방어막 없음) 모두 under-count.
+영향: 5개 테이블 전부(`usage_aggregates`/`usage_hourly`/`mcp_usage`/`plugin_usage`/`tool_usage`). 본인 Dashboard(`useUsage.ts` 1차 aggregates, 실패 시 로컬 단일기기) + 관리자 UserDashboard(`user-dashboard-data.ts` 100% aggregates, 방어막 없음) 모두 under-count.
 
 ---
 
@@ -60,8 +60,8 @@ device_id 가 PK 에 추가되면 같은 `(user_id, date, source)` 에 기기별
 
 ### 3.2 프론트 직접 SELECT 3곳 — 전부 안전
 - `fetchMyAggregatedPoints`(`useUsage.ts:70`) → `Dashboard.aggregateByPeriod` 가 `keyFn(p.ts)` 로 `tokens += ...` 누적 (모든 Point ts=자정이라 같은 날 device Point 들이 동일 키로 합쳐짐).
-- `fetchUserDailyAggregates`(`teams.ts:175`) → `UserDashboard.aggregate` 가 date 키 Map 에 `+=` 누적 + KPI 루프 전체 누적.
-- `fetchUserHourly`(`teams.ts:205`) → `UserDashboard.aggregateHourly` 가 localHour 키로 누적 (이미 source/model 멀티행을 합치는 중이라 device 추가도 동일 처리).
+- `fetchUserDailyAggregates`(`src/lib/user-dashboard-data.ts`) → `buildUserDashboardUsage`가 date 키 Map에 `+=` 누적 + KPI 루프 전체 누적.
+- `fetchUserHourly`(`src/lib/user-dashboard-data.ts`) → `buildUserDashboardUsage`가 localHour 키로 누적 (source/model/device 멀티행을 동일 버킷으로 합산).
 - `mcp_usage`/`plugin_usage`/`tool_usage` 는 프론트 직접 SELECT 없음 (RPC 전용).
 
 ### 3.3 갱신할 주석 1개
