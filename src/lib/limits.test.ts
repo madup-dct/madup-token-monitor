@@ -17,12 +17,12 @@ function w(kind: string, utilization: number, scope_model: string | null = null)
 }
 
 describe("pickQuotaSignal (잔여 기준)", () => {
-  it("잔여 ≥70% 초록 / ≥30% 노랑 / <30% 빨강", () => {
+  it("잔여 ≥70% 초록 / 40~70% 주황 / <40% 빨강", () => {
     expect(pickQuotaSignal(0.92)).toBe("lime");
     expect(pickQuotaSignal(0.7)).toBe("lime");
-    expect(pickQuotaSignal(0.69)).toBe("amber");
-    expect(pickQuotaSignal(0.3)).toBe("amber");
-    expect(pickQuotaSignal(0.29)).toBe("coral");
+    expect(pickQuotaSignal(0.69)).toBe("orange");
+    expect(pickQuotaSignal(0.4)).toBe("orange");
+    expect(pickQuotaSignal(0.39)).toBe("coral");
     expect(pickQuotaSignal(0)).toBe("coral");
   });
 });

@@ -75,10 +75,6 @@ function AccountRow({
   const updatedMs = new Date(row.updated_at).getTime();
   const stale = !Number.isFinite(updatedMs) || nowMs - updatedMs > STALE_MS;
   const min = minRemaining(row.windows);
-  const resetCandidates = row.windows
-    .map((w) => new Date(w.resets_at).getTime())
-    .filter((ms) => Number.isFinite(ms) && ms > nowMs);
-  const soonestReset = resetCandidates.length > 0 ? Math.min(...resetCandidates) : null;
 
   return (
     <div
@@ -97,6 +93,8 @@ function AccountRow({
         {row.windows.map((w, i) => {
           // 표기 숫자·게이지 채움은 사용률, 색은 잔여 기준 (트레이·패널과 통일).
           const used = usedPct(w.utilization);
+          const resetMs = new Date(w.resets_at).getTime();
+          const resetOk = Number.isFinite(resetMs) && resetMs > nowMs;
           return (
             <div key={`${w.kind}:${w.scope_model ?? i}`} className="min-w-0">
               <div className="flex items-center justify-between mb-1 gap-2">
@@ -112,15 +110,19 @@ function AccountRow({
                 segments={8}
                 label={`${windowShortLabel(w)} 사용률`}
               />
+              {/* 창(5h/7d/Fable)별 초기화 시각을 각자 표기 (2026-07-14 요청). */}
+              <div
+                className="num text-[9.5px] text-text-faint mt-1 whitespace-nowrap"
+                title={resetOk ? `${formatRelativeTimeKo(resetMs - nowMs)} 후 초기화` : undefined}
+              >
+                {resetOk ? `리셋 ${formatResetKo(resetMs)}` : "갱신 대기"}
+              </div>
             </div>
           );
         })}
       </div>
-      <div className="text-right shrink-0 w-32">
-        <div className="num text-[11px] text-text-secondary">
-          {soonestReset === null ? "갱신 대기" : `리셋 ${formatResetKo(soonestReset)}`}
-        </div>
-        <div className="text-[10px] text-text-faint mt-0.5">
+      <div className="text-right shrink-0 w-20">
+        <div className="text-[10px] text-text-faint">
           {Number.isFinite(updatedMs) ? `${formatRelativeTimeKo(nowMs - updatedMs)} 전 갱신` : "—"}
         </div>
       </div>

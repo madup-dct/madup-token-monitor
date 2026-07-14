@@ -2,7 +2,7 @@ import { pickQuotaSignal, type QuotaSignal } from "@/components/ui/quotaSignal";
 
 const DOT_BG: Record<QuotaSignal, string> = {
   lime: "var(--color-lime)",
-  amber: "var(--color-amber)",
+  orange: "var(--color-orange)",
   coral: "var(--color-coral)",
 };
 

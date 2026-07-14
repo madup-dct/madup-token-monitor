@@ -21,14 +21,15 @@ const BASE_H: u32 = 18; // 메뉴바 논리 높이(pt)
 const FONT_PT: f32 = 13.5;
 
 pub const GREEN: [u8; 4] = [52, 199, 89, 255]; // systemGreen
-pub const YELLOW: [u8; 4] = [255, 204, 0, 255]; // systemYellow
+pub const ORANGE: [u8; 4] = [255, 149, 0, 255]; // systemOrange (40~70% 잔여)
 pub const RED: [u8; 4] = [255, 59, 48, 255]; // systemRed
 
-pub fn dot_color(remaining_pct: f64) -> [u8; 4] {
+/// 잔여 기준 3단계 상태색 — 앱(quotaSignal)과 동일 임계값 (≥70 여유 / ≥40 주의 / <40 위험).
+pub fn band_color(remaining_pct: f64) -> [u8; 4] {
     if remaining_pct >= 70.0 {
         GREEN
-    } else if remaining_pct >= 30.0 {
-        YELLOW
+    } else if remaining_pct >= 40.0 {
+        ORANGE
     } else {
         RED
     }
@@ -84,17 +85,64 @@ impl Canvas {
         self.buf[idx + 3] = ((a + da * (1.0 - a)) * 255.0).round() as u8;
     }
 
-    fn fill_circle(&mut self, cx: f32, cy: f32, r: f32, color: [u8; 4]) {
-        let (x0, x1) = ((cx - r - 1.0) as i32, (cx + r + 1.0) as i32);
-        let (y0, y1) = ((cy - r - 1.0) as i32, (cy + r + 1.0) as i32);
-        for y in y0..=y1 {
-            for x in x0..=x1 {
-                let d = (((x as f32 + 0.5) - cx).powi(2) + ((y as f32 + 0.5) - cy).powi(2)).sqrt();
-                let alpha = (r - d + 0.5).clamp(0.0, 1.0); // 1px 안티앨리어스 에지
-                self.blend(x, y, color, alpha);
+    /// 안티앨리어스 rounded rect (SDF). x,y = 좌상단, r = 코너 반경. 배터리 셀 렌더용.
+    fn fill_round_rect(&mut self, x: f32, y: f32, w: f32, h: f32, r: f32, color: [u8; 4]) {
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
+        let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+        let (hx, hy) = (w / 2.0, h / 2.0);
+        let x0 = (x - 1.0).floor() as i32;
+        let x1 = (x + w + 1.0).ceil() as i32;
+        let y0 = (y - 1.0).floor() as i32;
+        let y1 = (y + h + 1.0).ceil() as i32;
+        for py in y0..y1 {
+            for px in x0..x1 {
+                let dx = ((px as f32 + 0.5) - cx).abs() - (hx - r);
+                let dy = ((py as f32 + 0.5) - cy).abs() - (hy - r);
+                let outside = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt() - r;
+                let inside = dx.max(dy).min(0.0);
+                let cov = (0.5 - (outside + inside)).clamp(0.0, 1.0);
+                self.blend(px, py, color, cov);
             }
         }
     }
+}
+
+/// 배터리 셀 총 폭 (body + nub). 폭 측정과 드로잉이 같은 값을 쓰도록 단일 소스.
+fn battery_width(bat_h: f32) -> f32 {
+    bat_h * 1.9 + bat_h * 0.28
+}
+
+/// 배터리 모양 레벨 표시 — 옆 메뉴바 아이콘과 톤을 맞추려 아이콘형(중립 트랙 + 상태색 채움).
+/// track(빈 부분) 위에 usage 만큼 fill 을 채우고 오른쪽에 nub. fill 색은 잔여 기준 상태색.
+fn draw_battery(
+    canvas: &mut Canvas,
+    x: f32,
+    y: f32,
+    bat_h: f32,
+    usage_frac: f32,
+    track: [u8; 4],
+    fill: [u8; 4],
+) {
+    let body_w = bat_h * 1.9;
+    let r = bat_h * 0.3;
+    canvas.fill_round_rect(x, y, body_w, bat_h, r, track);
+    let fw = (body_w * usage_frac.clamp(0.0, 1.0)).min(body_w);
+    if fw > 0.5 {
+        canvas.fill_round_rect(x, y, fw, bat_h, r.min(fw * 0.5), fill);
+    }
+    let nub_w = bat_h * 0.2;
+    let nub_h = bat_h * 0.5;
+    canvas.fill_round_rect(
+        x + body_w + bat_h * 0.06,
+        y + (bat_h - nub_h) / 2.0,
+        nub_w,
+        nub_h,
+        nub_w * 0.4,
+        track,
+    );
 }
 
 fn text_width(f: &Font, text: &str, px: f32) -> f32 {
@@ -205,9 +253,14 @@ pub fn render_status_strip(
     } else {
         ([0, 0, 0, 255], [255, 255, 255, 170])
     };
-    let dot_r = 3.5 * SCALE as f32;
-    let gap = 5.0 * SCALE as f32;
-    let sep = 9.0 * SCALE as f32;
+    let gap = 5.0 * SCALE as f32; // 로고↔본문
+    let label_gap = 3.0 * SCALE as f32; // 라벨↔배터리
+    let sep = 8.0 * SCALE as f32; // 항목 간
+    let bat_h = h as f32 * 0.5;
+    let bat_w = battery_width(bat_h);
+    let bat_y = (h as f32 - bat_h) / 2.0;
+    // 배터리 빈 트랙은 텍스트색의 중립 저채도 — 옆 메뉴바 아이콘과 톤 통일.
+    let track_color = [text_color[0], text_color[1], text_color[2], 64];
 
     // 1) 폭 측정
     let logo = logo_rgba.map(|(buf, w0, h0)| resize_rgba(buf, w0, h0, h));
@@ -219,19 +272,17 @@ pub fn render_status_strip(
         w += text_width(f, cost, px) + sep;
     }
     for (i, item) in items.iter().enumerate() {
-        w += dot_r * 2.0 + gap * 0.6;
-        w += text_width(f, &item_text(item), px);
+        w += text_width(f, &item.label, px) + label_gap + bat_w;
         if i + 1 < items.len() {
             w += sep;
         }
     }
-    // halo 가 마지막 글리프 오른쪽으로 삐져나올 수 있어 여유 폭 확보.
+    // halo·배터리 nub 가 오른쪽으로 삐져나올 수 있어 여유 폭 확보.
     let w = (w.ceil() as u32 + 2 * SCALE).max(1);
 
     // 2) 드로잉
     let mut canvas = Canvas::new(w, h);
     let baseline = h as f32 * 0.72;
-    let dot_cy = h as f32 * 0.52;
     let mut pen = 0.0f32;
     if let Some((buf, lw, lh)) = &logo {
         for y in 0..*lh {
@@ -252,27 +303,26 @@ pub fn render_status_strip(
             + sep;
     }
     for (i, item) in items.iter().enumerate() {
-        canvas.fill_circle(pen + dot_r, dot_cy, dot_r, dot_color(100.0 - item.used_pct));
-        pen += dot_r * 2.0 + gap * 0.6;
         pen = draw_text_with_halo(
             &mut canvas,
             f,
-            &item_text(item),
+            &item.label,
             pen,
             baseline,
             px,
             text_color,
             halo_color,
-        );
+        ) + label_gap;
+        let usage = (item.used_pct / 100.0).clamp(0.0, 1.0) as f32;
+        // fill 색은 잔여(100-사용률) 기준 상태색.
+        let fill = band_color(100.0 - item.used_pct);
+        draw_battery(&mut canvas, pen, bat_y, bat_h, usage, track_color, fill);
+        pen += bat_w;
         if i + 1 < items.len() {
             pen += sep;
         }
     }
     Some((canvas.buf, w, h))
-}
-
-fn item_text(item: &TrayItem) -> String {
-    format!("{} {}", item.label, item.used_pct.round() as i64)
 }
 
 #[cfg(test)]
@@ -303,11 +353,12 @@ mod tests {
     }
 
     #[test]
-    fn dot_color_matches_thresholds() {
-        assert_eq!(dot_color(92.0), GREEN);
-        assert_eq!(dot_color(70.0), GREEN);
-        assert_eq!(dot_color(69.9), YELLOW);
-        assert_eq!(dot_color(30.0), YELLOW);
-        assert_eq!(dot_color(29.9), RED);
+    fn band_color_matches_thresholds() {
+        // 잔여 기준: ≥70 green / 40~70 orange / <40 red.
+        assert_eq!(band_color(92.0), GREEN);
+        assert_eq!(band_color(70.0), GREEN);
+        assert_eq!(band_color(69.9), ORANGE);
+        assert_eq!(band_color(40.0), ORANGE);
+        assert_eq!(band_color(39.9), RED);
     }
 }

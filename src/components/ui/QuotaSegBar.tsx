@@ -11,19 +11,19 @@ interface QuotaSegBarProps {
 
 const FULL_BG: Record<QuotaSignal, string> = {
   lime: "var(--color-lime)",
-  amber: "var(--color-amber)",
+  orange: "var(--color-orange)",
   coral: "var(--color-coral)",
 };
 
 const DIM_BG: Record<QuotaSignal, string> = {
   lime: "rgba(155,225,93,0.35)",
-  amber: "rgba(245,181,68,0.35)",
+  orange: "rgba(255,159,69,0.35)",
   coral: "rgba(255,107,92,0.35)",
 };
 
 const GLOW: Record<QuotaSignal, string> = {
   lime: "0 0 8px rgba(155,225,93,0.45)",
-  amber: "0 0 8px rgba(245,181,68,0.45)",
+  orange: "0 0 8px rgba(255,159,69,0.45)",
   coral: "0 0 8px rgba(255,107,92,0.45)",
 };
 

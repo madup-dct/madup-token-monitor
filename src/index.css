@@ -49,6 +49,9 @@
   --color-amber: #f5b544;
   --color-amber-deep: #c88a1c;
   --color-amber-soft: rgba(245, 181, 68, 0.14);
+  --color-orange: #ff9f45;
+  --color-orange-deep: #e07d1c;
+  --color-orange-soft: rgba(255, 159, 69, 0.14);
   --color-coral: #ff6b5c;
   --color-coral-deep: #d43f2e;
   --color-coral-soft: rgba(255, 107, 92, 0.14);
@@ -129,6 +132,9 @@ html.theme-light {
   --color-amber: #c88a1c;
   --color-amber-deep: #966515;
   --color-amber-soft: rgba(200, 138, 28, 0.12);
+  --color-orange: #e07d1c;
+  --color-orange-deep: #b35f10;
+  --color-orange-soft: rgba(224, 125, 28, 0.12);
   --color-coral: #d43f2e;
   --color-coral-deep: #9d2a1d;
   --color-coral-soft: rgba(212, 63, 46, 0.1);
