@@ -1,9 +1,58 @@
+use std::sync::Mutex;
 use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, Runtime,
 };
 
 pub const TRAY_ID: &str = "main-tray";
+
+/// 마지막 렌더 내용 키 — 동일 내용이면 30초 폴링마다 아이콘 재설정을 생략.
+/// 비어 있지 않으면 "현재 커스텀 스트립 아이콘 상태"라는 뜻 (fallback 시 로고 복원 필요).
+static LAST_RENDER_KEY: Mutex<String> = Mutex::new(String::new());
+
+#[cfg(target_os = "macos")]
+fn is_dark_menubar() -> bool {
+    std::process::Command::new("defaults")
+        .args(["read", "-g", "AppleInterfaceStyle"])
+        .output()
+        .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("Dark"))
+        .unwrap_or(false)
+}
+
+/// OAuth 캐시의 windows → 트레이 표시 아이템. 리셋 경과 창은 생략(갱신 대기).
+fn tray_items_from_usage(
+    usage: &crate::oauth_usage::OAuthUsage,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<crate::tray_render::TrayItem> {
+    if usage.is_stale {
+        return Vec::new();
+    }
+    usage
+        .windows
+        .iter()
+        .filter_map(|w| {
+            let resets = chrono::DateTime::parse_from_rfc3339(&w.resets_at).ok()?;
+            if resets <= now {
+                return None;
+            }
+            let label = match w.kind.as_str() {
+                "session" => "5h".to_string(),
+                "weekly_all" => "7d".to_string(),
+                _ => w
+                    .scope_model
+                    .as_deref()
+                    .unwrap_or(w.kind.as_str())
+                    .chars()
+                    .next()
+                    .map(|c| c.to_ascii_uppercase().to_string())?,
+            };
+            Some(crate::tray_render::TrayItem {
+                label,
+                remaining_pct: (100.0 - w.utilization).clamp(0.0, 100.0),
+            })
+        })
+        .collect()
+}
 
 fn show_and_focus<R: Runtime>(app: &AppHandle<R>) {
     if let Some(w) = app.get_webview_window("main") {
@@ -70,25 +119,100 @@ pub fn refresh_tray_title<R: Runtime>(app: &AppHandle<R>) {
     // watcher 파싱 직후 즉시 호출돼도 블로킹되지 않는다.
     let cost = crate::commands::today_cost_usd() + crate::aggregator::cached_other_devices_cost();
     let show_text = crate::commands::read_show_menubar_cost();
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        #[cfg(target_os = "macos")]
-        {
-            let title = if show_text && cost >= 0.5 {
-                format!(" ${}", cost.round() as i64)
-            } else {
-                String::new()
-            };
-            let _ = tray.set_title(Some(title));
+    let show_limits = crate::commands::read_show_menubar_limits();
+    let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
+
+    #[cfg(target_os = "macos")]
+    {
+        let items = if show_limits {
+            crate::oauth_usage::cached_usage()
+                .map(|u| tray_items_from_usage(&u, chrono::Utc::now()))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let cost_text =
+            (show_text && cost >= 0.5).then(|| format!("${}", cost.round() as i64));
+
+        if !items.is_empty() {
+            let dark = is_dark_menubar();
+            let key = format!(
+                "{:?}|{}|{}",
+                cost_text,
+                items
+                    .iter()
+                    .map(|i| format!("{}{}", i.label, i.remaining_pct.round()))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                dark
+            );
+            let unchanged = LAST_RENDER_KEY.lock().map(|g| *g == key).unwrap_or(false);
+            if unchanged {
+                return;
+            }
+            let logo = tauri::image::Image::from_bytes(TRAY_ICON_BYTES).ok();
+            let logo_ref = logo.as_ref().map(|img| (img.rgba(), img.width(), img.height()));
+            if let Some((buf, w, h)) = crate::tray_render::render_status_strip(
+                logo_ref,
+                cost_text.as_deref(),
+                &items,
+                dark,
+            ) {
+                let _ = tray.set_icon(Some(tauri::image::Image::new_owned(buf, w, h)));
+                let _ = tray.set_title(Some(String::new()));
+                if let Ok(mut g) = LAST_RENDER_KEY.lock() {
+                    *g = key;
+                }
+                return;
+            }
+            // 렌더 실패(폰트 없음 등) → 아래 텍스트 fallback 으로 진행.
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let tooltip = if show_text && cost >= 0.5 {
-                format!("매드업 토큰 모니터 — 오늘 ${}", cost.round() as i64)
-            } else {
-                "매드업 토큰 모니터".to_string()
-            };
-            let _ = tray.set_tooltip(Some(tooltip));
+
+        // 한도 off / 캐시 없음 / 렌더 실패 — 기본 로고 + 기존 타이틀 방식.
+        let was_custom = LAST_RENDER_KEY.lock().map(|g| !g.is_empty()).unwrap_or(false);
+        if was_custom {
+            if let Ok(icon) = tauri::image::Image::from_bytes(TRAY_ICON_BYTES) {
+                let _ = tray.set_icon(Some(icon));
+            }
+            if let Ok(mut g) = LAST_RENDER_KEY.lock() {
+                g.clear();
+            }
         }
+        let title = if show_text && cost >= 0.5 {
+            format!(" ${}", cost.round() as i64)
+        } else {
+            String::new()
+        };
+        let _ = tray.set_title(Some(title));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // 비-macOS: tooltip 에 텍스트로 동일 정보.
+        let mut parts: Vec<String> = Vec::new();
+        if show_text && cost >= 0.5 {
+            parts.push(format!("오늘 ${}", cost.round() as i64));
+        }
+        if show_limits {
+            if let Some(u) = crate::oauth_usage::cached_usage() {
+                let items = tray_items_from_usage(&u, chrono::Utc::now());
+                if !items.is_empty() {
+                    parts.push(
+                        items
+                            .iter()
+                            .map(|i| format!("{} {}%", i.label, i.remaining_pct.round() as i64))
+                            .collect::<Vec<_>>()
+                            .join(" · "),
+                    );
+                }
+            }
+        }
+        let tooltip = if parts.is_empty() {
+            "매드업 토큰 모니터".to_string()
+        } else {
+            format!("매드업 토큰 모니터 — {}", parts.join(" · "))
+        };
+        let _ = tray.set_tooltip(Some(tooltip));
     }
 }
 
@@ -98,6 +222,11 @@ pub fn spawn_title_updater<R: Runtime>(app: AppHandle<R>) {
     std::thread::spawn(move || loop {
         // 타기기 오늘 비용 — stale(120초)일 때만 Supabase fetch. blocking 은 이 전용 스레드에서만.
         crate::aggregator::refresh_other_devices_cost_if_stale();
+        // OAuth 한도 — 10분 캐시 경유 (만료 시에만 네트워크). 트레이 한도 표시 +
+        // Supabase 스냅샷 업로드(Task 8)의 데이터 소스.
+        if crate::commands::read_show_menubar_limits() {
+            let _ = crate::oauth_usage::get_usage_blocking();
+        }
         refresh_tray_title(&app);
         std::thread::sleep(std::time::Duration::from_secs(30));
     });

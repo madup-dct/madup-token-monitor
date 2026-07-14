@@ -20,6 +20,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
+fontdue = "0.9"
 notify = "6"
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

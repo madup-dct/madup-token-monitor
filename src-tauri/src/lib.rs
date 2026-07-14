@@ -21,6 +21,7 @@ pub mod aggregator;
 // [MODULE MARKER] W5: 시스템 트레이 + 자동 업데이트
 // ============================================================
 pub mod tray;
+pub mod tray_render;
 
 // Claude OAuth 사용량 (5h / 7d 한도) — Anthropic의 비공개 endpoint
 pub mod oauth_usage;
