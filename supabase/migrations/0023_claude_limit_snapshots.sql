@@ -87,7 +87,15 @@ language sql stable security definer set search_path = public as $$
     s.updated_at
   from claude_limit_snapshots s
   left join claude_owner o on o.account_email = s.account_email
-  left join profiles p on p.email = coalesce(o.owner_email, s.account_email)
+  -- profiles.email 은 unique 제약이 없다 — 동일 이메일 행이 생겨도 계정 row 가
+  -- fan-out 되지 않도록 lateral limit 1 (가장 오래된 프로필 우선, 결정적).
+  left join lateral (
+    select pr.name
+    from profiles pr
+    where pr.email = coalesce(o.owner_email, s.account_email)
+    order by pr.created_at asc
+    limit 1
+  ) p on true
 $$;
 
 revoke all on function get_claude_account_limits() from public;
