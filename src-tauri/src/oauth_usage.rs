@@ -171,6 +171,34 @@ fn read_oauth_token_file() -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// 이 기기에 로그인된 Claude 계정 식별자.
+/// 한도의 주체는 앱 유저가 아니라 Claude 계정 — 팀이 계정을 나눠 쓰고 기기의 로그인
+/// 계정도 수시로 바뀌므로, Supabase 스냅샷은 이 값을 키로 upsert 한다.
+#[derive(Debug, Clone)]
+pub struct ClaudeAccount {
+    pub uuid: String,
+    pub email: String,
+}
+
+fn parse_claude_account(json: &str) -> Option<ClaudeAccount> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let oa = v.get("oauthAccount")?;
+    Some(ClaudeAccount {
+        uuid: oa.get("accountUuid")?.as_str()?.to_string(),
+        email: oa.get("emailAddress")?.as_str()?.to_string(),
+    })
+}
+
+/// `$CLAUDE_CONFIG_DIR/.claude.json` 우선, 없으면 `~/.claude.json`.
+pub fn read_claude_account() -> Option<ClaudeAccount> {
+    let dir: PathBuf = std::env::var("CLAUDE_CONFIG_DIR")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir)?;
+    let content = std::fs::read_to_string(dir.join(".claude.json")).ok()?;
+    parse_claude_account(&content)
+}
+
 fn fetch_usage_from_api(token: &str) -> Result<OAuthUsage, String> {
     let resp = ureq::get("https://api.anthropic.com/api/oauth/usage")
         .set("Authorization", &format!("Bearer {}", token))
@@ -343,5 +371,21 @@ mod tests {
     fn empty_response_yields_no_windows() {
         let api: ApiResponse = serde_json::from_str("{}").unwrap();
         assert!(windows_from_api(&api).is_empty());
+    }
+
+    #[test]
+    fn parses_claude_account_from_config_json() {
+        let json = r#"{"oauthAccount": {"accountUuid": "11111111-2222-3333-4444-555555555555",
+            "emailAddress": "someone@madup.com", "organizationName": "madup"}}"#;
+        let acc = parse_claude_account(json).unwrap();
+        assert_eq!(acc.uuid, "11111111-2222-3333-4444-555555555555");
+        assert_eq!(acc.email, "someone@madup.com");
+    }
+
+    #[test]
+    fn claude_account_none_when_missing() {
+        assert!(parse_claude_account("{}").is_none());
+        assert!(parse_claude_account("not json").is_none());
+        assert!(parse_claude_account(r#"{"oauthAccount": {"accountUuid": "x"}}"#).is_none());
     }
 }
