@@ -73,6 +73,19 @@ const NAV_ITEMS: NavItemDef[] = [
     ),
   },
   {
+    to: "/limits",
+    end: true,
+    labelKey: "nav.accountLimits",
+    group: "team",
+    icon: (
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <rect x="1.5" y="5" width="11" height="6" rx="1.5" />
+        <path d="M14.5 7v2" strokeLinecap="round" />
+        <rect x="3" y="6.5" width="4.5" height="3" rx="0.6" fill="currentColor" stroke="none" />
+      </svg>
+    ),
+  },
+  {
     to: "/team/company",
     labelKey: "nav.teamCompany",
     group: "team",

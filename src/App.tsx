@@ -12,6 +12,7 @@ import CompanyDashboard from "@/pages/CompanyDashboard";
 import TeamMy from "@/pages/TeamMy";
 import TeamManage from "@/pages/TeamManage";
 import AdminAnalytics from "@/pages/AdminAnalytics";
+import AccountLimits from "@/pages/AccountLimits";
 import Settings from "@/pages/Settings";
 import Login from "@/pages/Login";
 import UserDashboard from "@/pages/UserDashboard";
@@ -50,6 +51,7 @@ function Layout() {
               <Route path="/team/company" element={<CompanyDashboard />} />
               <Route path="/team/manage" element={<TeamManage />} />
               <Route path="/team/admin" element={<AdminAnalytics />} />
+              <Route path="/limits" element={<AccountLimits />} />
               <Route path="/user/:id" element={<UserDashboard />} />
               <Route path="/settings" element={<Settings />} />
             </Routes>

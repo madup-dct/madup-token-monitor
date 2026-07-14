@@ -2,6 +2,7 @@
   "nav": {
     "dashboard": "내 대시보드",
     "teamMy": "내 팀",
+    "accountLimits": "계정 한도",
     "teamCompany": "사내 대시보드",
     "teamManage": "팀 관리",
     "teamAdmin": "사용량 분석",

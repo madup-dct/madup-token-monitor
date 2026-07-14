@@ -1,6 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { buildMockCodexRateLimits } from "@/mocks/usageLimitMock";
-import type { CodexRateLimitSnapshot, LimitWindow } from "@/types/models";
+import { supabase } from "@/lib/supabase";
+import type {
+  CodexRateLimitSnapshot,
+  ClaudeAccountLimitRow,
+  LimitWindow,
+} from "@/types/models";
 
 const IS_MOCK = !("__TAURI_INTERNALS__" in window);
 
@@ -93,4 +98,50 @@ export async function refreshOAuthUsage(): Promise<OAuthUsageWithError> {
     const message = error instanceof Error ? error.message : String(error);
     return { data: null, error: message };
   }
+}
+
+function buildMockAccountLimits(): ClaudeAccountLimitRow[] {
+  const now = Date.now();
+  const reset5h = new Date(now + 2 * 3_600_000).toISOString();
+  const resetWk = new Date(now + 5 * 86_400_000).toISOString();
+  const acct = (
+    uuid: string,
+    email: string,
+    name: string | null,
+    u5: number,
+    u7: number,
+    uf: number,
+    updatedAgoMin: number,
+  ): ClaudeAccountLimitRow => ({
+    account_uuid: uuid,
+    account_email: email,
+    owner_email: email,
+    owner_name: name,
+    windows: [
+      { kind: "session", scope_model: null, utilization: u5, resets_at: reset5h },
+      { kind: "weekly_all", scope_model: null, utilization: u7, resets_at: resetWk },
+      { kind: "weekly_scoped", scope_model: "Fable", utilization: uf, resets_at: resetWk },
+    ],
+    fetched_at: new Date(now - updatedAgoMin * 60_000).toISOString(),
+    updated_at: new Date(now - updatedAgoMin * 60_000).toISOString(),
+  });
+  return [
+    acct("00000000-0000-0000-0000-000000000001", "hong@madup.com", "홍길동", 8, 12, 5, 3),
+    acct("00000000-0000-0000-0000-000000000002", "kim@madup.com", "김철수", 59, 37, 48, 7),
+    acct("00000000-0000-0000-0000-000000000003", "lee@madup.com", "이영희", 88, 70, 100, 45),
+  ];
+}
+
+export function useClaudeAccountLimits() {
+  return useQuery<ClaudeAccountLimitRow[]>({
+    queryKey: ["claudeAccountLimits"],
+    queryFn: async () => {
+      if (IS_MOCK) return delay(buildMockAccountLimits());
+      const { data, error } = await supabase.rpc("get_claude_account_limits");
+      if (error) throw new Error(error.message);
+      return (data ?? []) as ClaudeAccountLimitRow[];
+    },
+    staleTime: 60_000,
+    refetchInterval: 5 * 60_000,
+  });
 }
