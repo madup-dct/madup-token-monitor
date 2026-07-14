@@ -1,19 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { buildMockCodexRateLimits } from "@/mocks/usageLimitMock";
-import type { CodexRateLimitSnapshot } from "@/types/models";
+import type { CodexRateLimitSnapshot, LimitWindow } from "@/types/models";
 
 const IS_MOCK = !("__TAURI_INTERNALS__" in window);
 
-export interface OAuthUsageWindow {
-  utilization: number;
-  resets_at: string;
-}
-
 export interface OAuthUsage {
-  five_hour: OAuthUsageWindow | null;
-  seven_day: OAuthUsageWindow | null;
-  seven_day_sonnet: OAuthUsageWindow | null;
-  seven_day_opus: OAuthUsageWindow | null;
+  windows: LimitWindow[];
   fetched_at: string;
   is_stale: boolean;
 }
@@ -34,17 +26,28 @@ function delay<T>(value: T): Promise<T> {
 
 function buildMockOAuthUsage(): OAuthUsage {
   const now = Date.now();
+  // 잔여 92 / 58 / 22 — 3단계 색(초록/노랑/빨강)을 dev 에서 모두 확인.
   return {
-    five_hour: {
-      utilization: 42.5,
-      resets_at: new Date(now + 2 * 60 * 60_000).toISOString(),
-    },
-    seven_day: {
-      utilization: 18,
-      resets_at: new Date(now + 5 * 86_400_000).toISOString(),
-    },
-    seven_day_sonnet: null,
-    seven_day_opus: null,
+    windows: [
+      {
+        kind: "session",
+        scope_model: null,
+        utilization: 8,
+        resets_at: new Date(now + 2 * 3_600_000).toISOString(),
+      },
+      {
+        kind: "weekly_all",
+        scope_model: null,
+        utilization: 42.5,
+        resets_at: new Date(now + 5 * 86_400_000).toISOString(),
+      },
+      {
+        kind: "weekly_scoped",
+        scope_model: "Fable",
+        utilization: 78,
+        resets_at: new Date(now + 5 * 86_400_000).toISOString(),
+      },
+    ],
     fetched_at: new Date(now).toISOString(),
     is_stale: false,
   };

@@ -21,7 +21,7 @@ import { supabase } from "@/lib/supabase";
 import { mergeDayCounts, mergeSummaries, type UsageSource } from "@/lib/usage-sources";
 
 export { refreshOAuthUsage, useCodexRateLimits, useOAuthUsage } from "@/hooks/useRateLimits";
-export type { OAuthUsage, OAuthUsageWindow, OAuthUsageWithError } from "@/hooks/useRateLimits";
+export type { OAuthUsage, OAuthUsageWithError } from "@/hooks/useRateLimits";
 
 const IS_MOCK = !("__TAURI_INTERNALS__" in window);
 
