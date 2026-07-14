@@ -5,6 +5,7 @@ import {
   minRemaining,
   remainingPct,
   sortByRemainingDesc,
+  usedPct,
   windowLabel,
   windowOfKind,
   windowShortLabel,
@@ -33,6 +34,16 @@ describe("remainingPct", () => {
     expect(remainingPct(0)).toBe(100);
     expect(remainingPct(120)).toBe(0);
     expect(remainingPct(-5)).toBe(100);
+  });
+});
+
+describe("usedPct", () => {
+  it("사용률 그대로, 0~100 클램프, 정수 반올림 (표기 숫자용)", () => {
+    expect(usedPct(59)).toBe(59);
+    expect(usedPct(42.5)).toBe(43);
+    expect(usedPct(0)).toBe(0);
+    expect(usedPct(120)).toBe(100);
+    expect(usedPct(-5)).toBe(0);
   });
 });
 

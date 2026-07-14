@@ -4,7 +4,7 @@ import { quotaSignalClass } from "@/components/ui/quotaSignal";
 import {
   formatRelativeTimeKo,
   formatResetKo,
-  remainingPct,
+  usedPct,
   windowLabel,
 } from "@/lib/limits";
 import type { OAuthUsage } from "@/hooks/useRateLimits";
@@ -32,7 +32,7 @@ export function ClaudeLimits({
           <LimitRow
             key={`${w.kind}:${w.scope_model ?? i}`}
             label={windowLabel(w)}
-            remainingPercent={fresh ? remainingPct(w.utilization) : null}
+            usedPercent={fresh ? usedPct(w.utilization) : null}
             resetMs={fresh ? resetMs : null}
             nowMs={nowMs}
           />
@@ -70,7 +70,7 @@ export function CodexLimits({
           <LimitRow
             key={row.key}
             label={row.label}
-            remainingPercent={fresh ? remainingPct(row.window.used_percent) : null}
+            usedPercent={fresh ? usedPct(row.window.used_percent) : null}
             resetMs={fresh ? resetMs : null}
             nowMs={nowMs}
           />
@@ -93,17 +93,18 @@ function limitLabel(snapshot: CodexRateLimitSnapshot, window: CodexRateLimitWind
 
 function LimitRow({
   label,
-  remainingPercent,
+  usedPercent,
   resetMs,
   nowMs,
 }: {
   readonly label: string;
-  readonly remainingPercent: number | null; // null = 갱신 대기
+  readonly usedPercent: number | null; // null = 갱신 대기
   readonly resetMs: number | null;
   readonly nowMs: number;
 }) {
-  const value =
-    remainingPercent === null ? null : Math.min(1, Math.max(0, remainingPercent / 100));
+  // 표기 숫자·게이지 채움은 사용률, 상태 점·숫자 색은 잔여 기준 (2026-07-14 통일).
+  const used = usedPercent === null ? null : Math.min(1, Math.max(0, usedPercent / 100));
+  const remaining = used === null ? null : 1 - used;
   const resetLabel = resetMs === null ? "갱신 대기" : `리셋 ${formatResetKo(resetMs)}`;
   const resetTitle =
     resetMs === null ? undefined : `${formatRelativeTimeKo(resetMs - nowMs)} 후 초기화`;
@@ -111,7 +112,7 @@ function LimitRow({
     <div className="mt-4 first:mt-1">
       <div className="flex items-center justify-between mb-2 gap-3">
         <span className="flex items-center gap-2 min-w-0">
-          <StatusDot remaining={value} />
+          <StatusDot remaining={remaining} />
           <span className="text-[12px] font-semibold text-text-primary truncate" title={label}>
             {label}
           </span>
@@ -122,13 +123,13 @@ function LimitRow({
         >
           {resetLabel}
           <strong
-            className={`num text-[13px] font-medium ${value === null ? "text-text-faint" : quotaSignalClass(value)}`}
+            className={`num text-[13px] font-medium ${remaining === null ? "text-text-faint" : quotaSignalClass(remaining)}`}
           >
-            {remainingPercent === null ? "—" : `잔여 ${remainingPercent}%`}
+            {usedPercent === null ? "—" : `사용 ${usedPercent}%`}
           </strong>
         </span>
       </div>
-      <QuotaSegBar value={value} label={`${label} 잔여`} />
+      <QuotaSegBar value={used} label={`${label} 사용률`} />
     </div>
   );
 }

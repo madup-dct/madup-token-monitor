@@ -126,6 +126,35 @@ fn draw_text(
     pen
 }
 
+/// 텍스트 + 대비 외곽선(halo).
+/// 메뉴바 배경은 벽지 틴트가 섞여 밝기가 제각각 — 단색 텍스트는 중간톤 배경에서
+/// 회색처럼 묻힌다 (2026-07-14 실기기 피드백). 반대색 halo 로 어떤 배경에서도 또렷하게.
+fn draw_text_with_halo(
+    canvas: &mut Canvas,
+    f: &Font,
+    text: &str,
+    x: f32,
+    baseline: f32,
+    px: f32,
+    color: [u8; 4],
+    halo: [u8; 4],
+) -> f32 {
+    let o = SCALE as f32 * 0.75;
+    for (dx, dy) in [
+        (-o, 0.0),
+        (o, 0.0),
+        (0.0, -o),
+        (0.0, o),
+        (-o, -o),
+        (o, -o),
+        (-o, o),
+        (o, o),
+    ] {
+        draw_text(canvas, f, text, x + dx, baseline + dy, px, halo);
+    }
+    draw_text(canvas, f, text, x, baseline, px, color)
+}
+
 /// 로고 RGBA 를 box-average 로 target 높이에 맞춰 축소 (비율 유지).
 fn resize_rgba(src: &[u8], sw: u32, sh: u32, th: u32) -> (Vec<u8>, u32, u32) {
     let tw = ((sw as f32) * (th as f32) / (sh as f32)).round().max(1.0) as u32;
@@ -170,11 +199,11 @@ pub fn render_status_strip(
     let f = font()?;
     let h = BASE_H * SCALE;
     let px = FONT_PT * SCALE as f32;
-    // 알파를 낮추면 밝은 배경화면 위에서 흐릿해진다 — 불투명이 가독성에 유리.
-    let text_color: [u8; 4] = if dark_menubar {
-        [255, 255, 255, 255]
+    // 본문은 불투명 + 반대색 halo — 벽지 틴트가 섞인 메뉴바에서도 가독성 확보.
+    let (text_color, halo_color): ([u8; 4], [u8; 4]) = if dark_menubar {
+        ([255, 255, 255, 255], [0, 0, 0, 150])
     } else {
-        [0, 0, 0, 255]
+        ([0, 0, 0, 255], [255, 255, 255, 170])
     };
     let dot_r = 3.5 * SCALE as f32;
     let gap = 5.0 * SCALE as f32;
@@ -196,7 +225,8 @@ pub fn render_status_strip(
             w += sep;
         }
     }
-    let w = (w.ceil() as u32).max(1);
+    // halo 가 마지막 글리프 오른쪽으로 삐져나올 수 있어 여유 폭 확보.
+    let w = (w.ceil() as u32 + 2 * SCALE).max(1);
 
     // 2) 드로잉
     let mut canvas = Canvas::new(w, h);
@@ -218,12 +248,22 @@ pub fn render_status_strip(
         pen += *lw as f32 + gap;
     }
     if let Some(cost) = cost_text {
-        pen = draw_text(&mut canvas, f, cost, pen, baseline, px, text_color) + sep;
+        pen = draw_text_with_halo(&mut canvas, f, cost, pen, baseline, px, text_color, halo_color)
+            + sep;
     }
     for (i, item) in items.iter().enumerate() {
         canvas.fill_circle(pen + dot_r, dot_cy, dot_r, dot_color(100.0 - item.used_pct));
         pen += dot_r * 2.0 + gap * 0.6;
-        pen = draw_text(&mut canvas, f, &item_text(item), pen, baseline, px, text_color);
+        pen = draw_text_with_halo(
+            &mut canvas,
+            f,
+            &item_text(item),
+            pen,
+            baseline,
+            px,
+            text_color,
+            halo_color,
+        );
         if i + 1 < items.len() {
             pen += sep;
         }

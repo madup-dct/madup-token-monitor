@@ -8,8 +8,8 @@ import {
   formatRelativeTimeKo,
   formatResetKo,
   minRemaining,
-  remainingPct,
   sortByRemainingDesc,
+  usedPct,
   windowShortLabel,
   type SortKind,
 } from "@/lib/limits";
@@ -37,7 +37,7 @@ export default function AccountLimits() {
         <div>
           <h1 className="text-[18px] font-bold text-text-primary">계정 한도</h1>
           <p className="text-[12px] text-text-tertiary mt-1">
-            계정별 Claude 잔여 한도 — 여유 있는 계정에 쉐어를 요청하세요. 잔여 많은 순 정렬.
+            계정별 Claude 한도 사용률 — 여유 있는 계정에 쉐어를 요청하세요. 여유 많은 순 정렬.
           </p>
         </div>
         <Segmented
@@ -95,21 +95,22 @@ function AccountRow({
       </div>
       <div className="flex-1 grid grid-cols-3 gap-4 min-w-0">
         {row.windows.map((w, i) => {
-          const remaining = remainingPct(w.utilization);
+          // 표기 숫자·게이지 채움은 사용률, 색은 잔여 기준 (트레이·패널과 통일).
+          const used = usedPct(w.utilization);
           return (
             <div key={`${w.kind}:${w.scope_model ?? i}`} className="min-w-0">
               <div className="flex items-center justify-between mb-1 gap-2">
                 <span className="text-[10.5px] font-semibold text-text-secondary">
                   {windowShortLabel(w)}
                 </span>
-                <span className={`num text-[11.5px] ${quotaSignalClass(remaining / 100)}`}>
-                  {remaining}%
+                <span className={`num text-[11.5px] ${quotaSignalClass((100 - used) / 100)}`}>
+                  {used}%
                 </span>
               </div>
               <QuotaSegBar
-                value={remaining / 100}
+                value={used / 100}
                 segments={8}
-                label={`${windowShortLabel(w)} 잔여`}
+                label={`${windowShortLabel(w)} 사용률`}
               />
             </div>
           );

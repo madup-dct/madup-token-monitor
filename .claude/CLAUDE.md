@@ -306,7 +306,7 @@ rowid 재사용으로 워터마크가 신규 이벤트를 영구 누락시킨다
     의도적 구분 — 통일 재제안 금지.
   - **플러그인 ID 표시는 `prettyPluginId`(lib/labels.ts) 경유** — Claude Code 가 절단한
     중복 ID("playwright_playwrig")를 정리. RankBarList 에는 `title`(원본) 함께 전달.
-  - **`quotaSignal`/`QuotaSegBar` 의 입력은 "잔여 비율"(배터리 의미)** — 사용률을 넘기면 색이 반대로 나온다. 잔여 ≥70% lime / ≥30% amber / <30% coral.
+  - **한도 표기 통일 (2026-07-14): 숫자·게이지 채움 = 사용률, 신호색·정렬·상태점 = 잔여** (트레이·한도 패널·계정 한도 공통). `pickQuotaSignal` 입력은 "잔여 비율"(≥0.7 lime / ≥0.3 amber / <0.3 coral), `QuotaSegBar` 의 `value` 는 "사용률"(내부에서 1-value 로 색 결정) — 반대로 넘기면 색이 뒤집힌다.
 
   - 다른 페이지에서 비슷한 컴포넌트가 필요하면 → **공유 컴포넌트의 prop 슬롯/variant 를 확장**.
   - 한 페이지에서만 의미 있는 UI 라도, **두 번째 페이지에서 비슷하게 필요해지는 순간 추출**.

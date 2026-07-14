@@ -6,6 +6,12 @@ export function remainingPct(utilization: number): number {
   return Math.round(Math.min(100, Math.max(0, 100 - utilization)));
 }
 
+/// 표기 숫자는 사용률 % (2026-07-14 통일 — 트레이·패널·계정 한도 페이지 공통).
+/// 신호색·정렬은 여전히 잔여(remainingPct) 기준.
+export function usedPct(utilization: number): number {
+  return Math.round(Math.min(100, Math.max(0, utilization)));
+}
+
 export function windowLabel(w: LimitWindow): string {
   if (w.kind === "session") return "5시간 한도";
   if (w.kind === "weekly_all") return "주간 한도";
