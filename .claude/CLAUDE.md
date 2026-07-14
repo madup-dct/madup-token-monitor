@@ -71,7 +71,8 @@ madup_token_monitoring/
 │       ├── aggregator.rs   # Supabase 집계 업로드 (sync_aggregates_now)
 │       ├── pricing.rs      # 모델별 단가 테이블
 │       ├── plugins.rs      # 플러그인 사용 집계
-│       └── oauth_usage.rs  # Anthropic 비공개 endpoint (5h/7d 한도)
+│       ├── oauth_usage.rs  # Anthropic 비공개 endpoint (limits 배열 → windows 일반화, 계정 식별)
+│       └── tray_render.rs  # 트레이 한도 상태 스트립 RGBA 렌더 (fontdue)
 ├── supabase/migrations/    # SQL 스키마 + RPC (get_top_users, get_top_mcp, get_top_plugins, ...)
 └── package.json            # version 이 빌드/태그의 single source of truth (tauri.conf.json 도 동일하게 유지)
 ```
@@ -245,6 +246,12 @@ React (useUsage.ts) → Dashboard / MCP / Plugins
 aggregator.rs → Supabase usage_aggregates / mcp_aggregates / plugin_aggregates
   ↓ Supabase RPC (get_top_users, get_top_mcp, get_top_plugins, get_weekly_top10)
 Leaderboard / Plugins (사내 집계 view)
+
+oauth_usage.rs (10분 캐시) → 트레이 상태 스트립(tray_render) + 대시보드 한도 패널(잔여 배터리)
+  ↓ (30초 폴링 스레드, fetched_at dedup)
+aggregator.rs::upload_limit_snapshot_if_fresh → Supabase claude_limit_snapshots (계정 단위 upsert)
+  ↓ RPC get_claude_account_limits (+ claude_owner 소유자 매핑)
+AccountLimits 페이지 (/limits — 계정별 잔여/리셋, Fable 잔여순)
 ```
 
 `usage_events` 의 `(message_id, request_id)` UNIQUE INDEX 로 dedup.
@@ -292,12 +299,14 @@ rowid 재사용으로 워터마크가 신규 이벤트를 영구 누락시킨다
   | 캐러셀 컨트롤 (이전/점/다음 + 선택적 자동 토글) | `@/components/ui/CarouselControls` | UsageSourceCarousel, CompanyDashboard, MyTeamPanel |
   | 토큰 소스·계정 한도 캐러셀 | `@/components/dashboard/UsageSourceCarousel` | Dashboard (통합/Claude/Codex 전역 선택) |
   | Dropdown (single-select) | `@/components/ui/Select` | **모든 페이지** — native `<select>` 금지 |
+  | 3단계 잔여 상태 점 (초록/노랑/빨강, 이모지 대체) | `@/components/ui/StatusDot` | UsageLimitPanel, AccountLimits |
 
   - **granularity(시간별/일자별/주별/월별) 컨트롤 컨벤션** — ambient 대시보드 카드는
     `CarouselControls`(자동 회전 포함), 분석 페이지(AdminAnalytics)는 `Segmented`(직접 선택).
     의도적 구분 — 통일 재제안 금지.
   - **플러그인 ID 표시는 `prettyPluginId`(lib/labels.ts) 경유** — Claude Code 가 절단한
     중복 ID("playwright_playwrig")를 정리. RankBarList 에는 `title`(원본) 함께 전달.
+  - **`quotaSignal`/`QuotaSegBar` 의 입력은 "잔여 비율"(배터리 의미)** — 사용률을 넘기면 색이 반대로 나온다. 잔여 ≥70% lime / ≥30% amber / <30% coral.
 
   - 다른 페이지에서 비슷한 컴포넌트가 필요하면 → **공유 컴포넌트의 prop 슬롯/variant 를 확장**.
   - 한 페이지에서만 의미 있는 UI 라도, **두 번째 페이지에서 비슷하게 필요해지는 순간 추출**.
