@@ -197,6 +197,67 @@ pub fn refresh_other_devices_cost_if_stale() {
     }
 }
 
+/// 마지막으로 업로드한 스냅샷의 fetched_at — 같은 데이터 재업로드 방지.
+static LAST_LIMITS_UPLOAD: Mutex<Option<String>> = Mutex::new(None);
+
+/// 계정 단위 Claude 한도 스냅샷을 Supabase 에 upsert.
+/// blocking(ureq) — 30초 폴링 스레드(spawn_title_updater) 전용. 파싱 경로에서 호출 금지.
+/// 동의 토글 없음 — 로그인 상태면 항상 업로드 (스펙 §4.3, 2026-07-13 기획 확정).
+/// OAuth 캐시(10분)가 갱신됐을 때만 실제 네트워크 업로드가 발생한다 (fetched_at dedup).
+pub fn upload_limit_snapshot_if_fresh() {
+    let session = {
+        let Ok(guard) = SESSION.lock() else { return };
+        match guard.as_ref() {
+            Some(s) => s.clone(),
+            None => return, // 미로그인 — 업로드 없음
+        }
+    };
+    let Some(account) = crate::oauth_usage::read_claude_account() else {
+        return; // ~/.claude.json 없음 / oauthAccount 없음 — 로컬 표시만 (스펙 §5)
+    };
+    let usage = match crate::oauth_usage::get_usage_blocking() {
+        Ok(u) => u,
+        Err(_) => return, // 토큰 없음/429 등 — 다음 사이클 재시도
+    };
+    if usage.is_stale || usage.windows.is_empty() {
+        return;
+    }
+    {
+        let Ok(guard) = LAST_LIMITS_UPLOAD.lock() else { return };
+        if guard.as_deref() == Some(usage.fetched_at.as_str()) {
+            return; // 캐시 미갱신 — 이미 올린 스냅샷
+        }
+    }
+    if uuid::Uuid::try_parse(&account.uuid).is_err() {
+        return; // account_uuid 컬럼이 uuid 타입 — 방어
+    }
+
+    let url = format!(
+        "{}/rest/v1/rpc/upsert_claude_limit_snapshot",
+        session.supabase_url
+    );
+    let body = serde_json::json!({
+        "p_account_uuid": account.uuid,
+        "p_account_email": account.email,
+        "p_windows": usage.windows,
+        "p_fetched_at": usage.fetched_at,
+    });
+    let resp = ureq::post(&url)
+        .set("apikey", &session.publishable_key)
+        .set("Authorization", &format!("Bearer {}", session.access_token))
+        .set("Content-Type", "application/json")
+        .timeout(Duration::from_secs(10))
+        .send_json(body);
+    match resp {
+        Ok(_) => {
+            if let Ok(mut guard) = LAST_LIMITS_UPLOAD.lock() {
+                *guard = Some(usage.fetched_at);
+            }
+        }
+        Err(e) => eprintln!("[limit-snapshot] upload failed: {e}"),
+    }
+}
+
 /// GET /rest/v1/usage_aggregates — 오늘(로컬 YYYY-MM-DD) 내 행들에서 타기기 합 계산.
 /// RLS 가 본인 row SELECT 만 허용하지만 user_id=eq 필터를 명시해 의도를 분명히 한다.
 fn fetch_other_devices_today_cost(
