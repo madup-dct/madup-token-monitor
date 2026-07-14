@@ -74,6 +74,14 @@ export interface CodexRateLimitSnapshot {
   readonly observed_at: number;
 }
 
+/// Anthropic OAuth usage API 의 한도 창 1개 — Rust LimitWindow 와 동일 shape.
+export interface LimitWindow {
+  kind: string; // "session" | "weekly_all" | "weekly_scoped" | (미래 확장)
+  scope_model: string | null;
+  utilization: number; // 사용률 % 0~100
+  resets_at: string; // RFC3339
+}
+
 export type Range = "1d" | "7d" | "30d" | "90d" | "365d" | "all";
 
 export interface LeaderboardEntry {
