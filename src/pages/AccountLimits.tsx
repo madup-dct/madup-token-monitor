@@ -40,12 +40,18 @@ export default function AccountLimits() {
             계정별 Claude 한도 사용률 — 여유 있는 계정에 쉐어를 요청하세요. 여유 많은 순 정렬.
           </p>
         </div>
-        <Segmented
-          value={sortKind}
-          onChange={setSortKind}
-          options={SORT_OPTIONS}
-          ariaLabel="정렬 기준 한도 창"
-        />
+        {/* 정렬 기준(어느 창 여유 순). 계정이 2개 이상일 때만 — 1개면 정렬이 무의미. */}
+        {sorted.length > 1 ? (
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-[11px] text-text-tertiary whitespace-nowrap">여유 정렬</span>
+            <Segmented
+              value={sortKind}
+              onChange={setSortKind}
+              options={SORT_OPTIONS}
+              ariaLabel="정렬 기준 한도 창"
+            />
+          </div>
+        ) : null}
       </header>
 
       {isLoading ? (
