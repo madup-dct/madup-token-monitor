@@ -93,7 +93,7 @@ language sql stable security definer set search_path = public as $$
     select pr.name
     from profiles pr
     where pr.email = coalesce(o.owner_email, s.account_email)
-    order by pr.created_at asc
+    order by pr.created_at asc, pr.id asc
     limit 1
   ) p on true
 $$;

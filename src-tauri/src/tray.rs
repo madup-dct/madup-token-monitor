@@ -234,8 +234,9 @@ pub fn spawn_title_updater<R: Runtime>(app: AppHandle<R>) {
     std::thread::spawn(move || loop {
         // 타기기 오늘 비용 — stale(120초)일 때만 Supabase fetch. blocking 은 이 전용 스레드에서만.
         crate::aggregator::refresh_other_devices_cost_if_stale();
-        // OAuth 한도 fetch(10분 캐시) + 계정 스냅샷 업로드 — 트레이 토글과 무관하게 항상.
-        // 업로드 함수 내부에서 fetch 하므로 별도 get_usage_blocking 호출 불필요.
+        // OAuth 한도 fetch(10분 캐시) — 트레이 표시는 로그인/계정/업로드 쿨다운과 무관하게
+        // 항상 캐시를 데운다 (스펙 §2). 업로드 함수는 이 캐시를 재사용한다.
+        let _ = crate::oauth_usage::get_usage_blocking();
         crate::aggregator::upload_limit_snapshot_if_fresh();
         #[cfg(target_os = "macos")]
         refresh_dark_menubar_cache();

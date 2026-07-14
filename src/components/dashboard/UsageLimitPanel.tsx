@@ -81,14 +81,14 @@ export function CodexLimits({
 }
 
 function limitLabel(snapshot: CodexRateLimitSnapshot, window: CodexRateLimitWindow): string {
-  const windowLabel =
+  const periodLabel =
     window.window_minutes === 300
       ? "5시간"
       : window.window_minutes === 10_080
         ? "주간"
         : `${window.window_minutes}분`;
   const limitName = snapshot.limit_name?.replace(/^GPT-[^-]+-Codex-/, "Codex ");
-  return limitName ? `${limitName} · ${windowLabel}` : `${windowLabel} 한도`;
+  return limitName ? `${limitName} · ${periodLabel}` : `${periodLabel} 한도`;
 }
 
 function LimitRow({

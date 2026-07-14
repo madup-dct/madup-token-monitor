@@ -27,7 +27,7 @@ const GLOW: Record<QuotaSignal, string> = {
   coral: "0 0 8px rgba(255,107,92,0.45)",
 };
 
-/// 12-세그먼트 quota meter — pacing-in-time 표현. 신호색은 사용률에 자동 매핑.
+/// 12-세그먼트 quota meter — pacing-in-time 표현. 신호색은 잔여 비율(배터리 의미)에 자동 매핑.
 /// 채워진 만큼 fully filled, 마지막 부분 채움은 dim 으로.
 export function QuotaSegBar({
   value,
