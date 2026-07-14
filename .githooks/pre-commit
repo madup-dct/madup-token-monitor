@@ -1,0 +1,16 @@
+#!/bin/sh
+# gitleaks pre-commit — staged 변경분에서 시크릿 스캔 (madup-token-monitor)
+#
+# 활성화: ./scripts/setup-gitleaks.sh  (git config core.hooksPath .githooks)
+# gitleaks 미설치 시 경고만 하고 통과한다 — 하드 차단은 CI 가 담당
+# (.github/workflows/gitleaks.yml). 이 파일은 repo 에 커밋되어 팀이 공유한다.
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  printf '\033[33m⚠  gitleaks 미설치 — 커밋 시크릿 스캔을 건너뜁니다.\033[0m\n' >&2
+  printf '   설치: brew install gitleaks  (이후 커밋부터 자동 스캔)\n' >&2
+  exit 0
+fi
+
+# 누출 발견 시 gitleaks 가 exit 1 → 커밋 중단.
+# 오탐이면 해당 줄 끝에 "# gitleaks:allow" 를 붙이거나 .gitleaks.toml 을 조정한다.
+gitleaks git --staged --redact --no-banner -v -c .gitleaks.toml

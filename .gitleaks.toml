@@ -1,0 +1,30 @@
+# gitleaks 설정 — madup-token-monitor
+#
+# 이 repo 는 자동 업데이트 / Slack OAuth 설정상 당분간 public 을 유지해야 하므로,
+# 실수로 커밋된 시크릿을 로컬 pre-commit 훅(.githooks/pre-commit)과 CI(.github/workflows/gitleaks.yml)
+# 양쪽에서 차단한다.
+#
+# 오탐 1건만 무시하려면: 해당 줄 끝에  # gitleaks:allow  주석을 붙인다.
+# allowlist 확장이 필요하면 아래 [allowlist] 에 최소 범위로만 추가한다.
+
+title = "madup-token-monitor gitleaks config"
+
+# gitleaks 기본 룰셋(수백 개 provider 패턴)을 그대로 사용하고 아래 allowlist 만 덧댄다.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "공개가 의도된 값 / 예시 파일만 예외 처리 (실제 시크릿은 계속 검출)"
+
+# .env.example 은 항상 placeholder 만 담는 예시 파일 (컨벤션상 실제 값 없음).
+paths = [
+  '''\.env\.example$''',
+]
+
+# Supabase publishable/anon key (sb_publishable_...) 는 클라이언트 번들에 실려
+# 공개되도록 설계된 값이며 RLS 로 보호된다 (.env.example 주석 참고).
+# 과거 커밋 8b0f664 에 잠깐 올라갔던 값이 이 패턴이라 generic-api-key 로 오탐된다.
+# ⚠️ secret key(sb_secret_...) 는 절대 여기에 포함하지 않는다 — DB 어드민 노출.
+regexes = [
+  '''sb_publishable_[A-Za-z0-9_-]+''',
+]

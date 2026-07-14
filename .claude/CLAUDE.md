@@ -98,6 +98,9 @@ madup_token_monitoring/
 # 2) 의존성
 pnpm install --dangerously-allow-all-builds
 
+# 2.5) 시크릿 커밋 방지 훅 (public repo — docs/GITLEAKS.md)
+brew install gitleaks && ./scripts/setup-gitleaks.sh
+
 # 3) .env (gitignored). docs/SUPABASE_SETUP.md 와 GITHUB_SECRETS.md 를 보고 동일한 값 채움
 cat > .env <<EOF
 VITE_SUPABASE_URL=https://<project-ref>.supabase.co
@@ -233,6 +236,18 @@ bash scripts/release.sh
 - fork된 subagent rollout에 복사된 부모 turn은 제외하고, child 자신의 turn부터만 집계한다.
 - GPT-5.6 Codex 모델(`gpt-5.6-sol/terra/luna`) 단가는 `src-tauri/pricing.json`에 공식 가격 기준으로
   등록한다. 새 모델 추가 시 `pricing.rs` 회귀 테스트도 함께 갱신한다.
+
+### 6.11 gitleaks allowlist 는 최소 범위로 (public repo)
+- 이 repo 는 public 이라 시크릿 커밋 방지를 로컬 pre-commit(`.githooks/pre-commit`) + CI
+  (`.github/workflows/gitleaks.yml`) 두 겹으로 건다. 설정은 `.gitleaks.toml`, 가이드는
+  `docs/GITLEAKS.md`.
+- **오탐이 나도 `.env` 같은 경로 전체를 allowlist 하지 말 것.** 미래의 실제 시크릿
+  (`sb_secret_...`, Slack secret, AWS 키)까지 삼킨다. 한 줄만 `# gitleaks:allow`, 또는
+  패턴 단위로만 예외 처리한다.
+- 현재 allowlist 는 `sb_publishable_...`(클라이언트 공개용 anon key, RLS 보호) + `.env.example`
+  뿐. 과거 `8b0f664` 의 `.env` 는 이 publishable key 라 실제 유출 아님(로테이션 불필요).
+- CI 는 조직(madup-dct) 유료 라이선스가 필요한 공식 gitleaks-action 대신 CLI 바이너리를 직접
+  실행한다(버전 핀: `gitleaks.yml` 의 `GITLEAKS_VERSION`).
 
 ## 7. 데이터 흐름 (요약)
 
