@@ -23,10 +23,12 @@ const IS_TAURI = "__TAURI_INTERNALS__" in window;
 const DATA_DIR_CACHE_KEY = "madup-token-monitor:dataDir";
 const LAST_SYNC_KEY = "madup-token-monitor:lastSync";
 const SHOW_MENUBAR_COST_KEY = "madup-token-monitor:showMenubarCost";
+const SHOW_MENUBAR_LIMITS_KEY = "madup-token-monitor:showMenubarLimits";
 const NOTIFY_ON_UPDATE_KEY = "madup-token-monitor:notifyOnUpdate";
 
 interface AppSettings {
   show_menubar_cost?: boolean;
+  show_menubar_limits?: boolean;
   notify_on_update?: boolean;
 }
 
@@ -79,6 +81,9 @@ export default function Settings() {
   // App behavior — localStorage 로 즉시 복원(dev/재마운트 깜빡임 방지), Tauri 면 get_settings 가 source of truth.
   const [showMenubarCost, setShowMenubarCost] = useState<boolean>(
     () => readJson<boolean>(SHOW_MENUBAR_COST_KEY) ?? true,
+  );
+  const [showMenubarLimits, setShowMenubarLimits] = useState<boolean>(
+    () => readJson<boolean>(SHOW_MENUBAR_LIMITS_KEY) ?? false,
   );
   const [notifyOnUpdate, setNotifyOnUpdate] = useState<boolean>(
     () => readJson<boolean>(NOTIFY_ON_UPDATE_KEY) ?? true,
@@ -137,6 +142,9 @@ export default function Settings() {
           const nou = s.notify_on_update ?? true;
           setShowMenubarCost(smc);
           writeJson(SHOW_MENUBAR_COST_KEY, smc);
+          const sml = s.show_menubar_limits ?? false;
+          setShowMenubarLimits(sml);
+          writeJson(SHOW_MENUBAR_LIMITS_KEY, sml);
           setNotifyOnUpdate(nou);
           writeJson(NOTIFY_ON_UPDATE_KEY, nou);
         }
@@ -217,6 +225,16 @@ export default function Settings() {
     invoke("set_setting", { key: "show_menubar_cost", value: next }).catch(() => {
       setShowMenubarCost(!next);
       writeJson(SHOW_MENUBAR_COST_KEY, !next);
+    });
+  }
+
+  async function handleShowMenubarLimitsChange(next: boolean) {
+    setShowMenubarLimits(next);
+    writeJson(SHOW_MENUBAR_LIMITS_KEY, next);
+    if (!IS_TAURI) return;
+    invoke("set_setting", { key: "show_menubar_limits", value: next }).catch(() => {
+      setShowMenubarLimits(!next);
+      writeJson(SHOW_MENUBAR_LIMITS_KEY, !next);
     });
   }
 
@@ -511,6 +529,13 @@ export default function Settings() {
             onChange={handleShowMenubarCostChange}
             label="트레이/메뉴바에 오늘 사용량 표시"
             description="트레이/메뉴바 아이콘 옆(또는 tooltip)에 오늘 사용한 USD 금액이 1분마다 갱신됩니다."
+          />
+          <SwitchRow
+            checked={showMenubarLimits}
+            disabled={!IS_TAURI}
+            onChange={handleShowMenubarLimitsChange}
+            label="트레이/메뉴바에 Claude 잔여 한도 표시"
+            description="5h/7d/Fable 잔여 %를 상태색 점과 함께 메뉴바에 표시합니다. 데이터는 Claude Code 로그인 계정 기준입니다."
           />
           <SwitchRow
             checked={notifyOnUpdate}

@@ -114,6 +114,14 @@ pub fn read_show_menubar_cost() -> bool {
     }
 }
 
+/// 트레이 한도(잔여 배터리) 표시 여부. 기본값 false (opt-in).
+pub fn read_show_menubar_limits() -> bool {
+    matches!(
+        read_settings().get("show_menubar_limits"),
+        Some(JsonValue::Bool(true))
+    )
+}
+
 #[tauri::command]
 pub fn get_settings() -> Result<JsonValue, String> {
     let map = read_settings();
@@ -122,7 +130,7 @@ pub fn get_settings() -> Result<JsonValue, String> {
 
 #[tauri::command]
 pub fn set_setting(app: tauri::AppHandle, key: String, value: JsonValue) -> Result<(), String> {
-    let touched_menubar = key == "show_menubar_cost";
+    let touched_menubar = key == "show_menubar_cost" || key == "show_menubar_limits";
     let mut map = read_settings();
     map.insert(key, value);
     write_settings(&map)?;
