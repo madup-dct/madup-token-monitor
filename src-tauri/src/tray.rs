@@ -10,13 +10,25 @@ pub const TRAY_ID: &str = "main-tray";
 /// 비어 있지 않으면 "현재 커스텀 스트립 아이콘 상태"라는 뜻 (fallback 시 로고 복원 필요).
 static LAST_RENDER_KEY: Mutex<String> = Mutex::new(String::new());
 
+/// 메뉴바 다크 여부 캐시 — 블로킹 조회(defaults read)는 폴링 스레드에서만 수행하고,
+/// refresh_tray_title(watcher 핫패스)은 이 원자값만 읽는다 (캐시 읽기 전용 제약).
+static DARK_MENUBAR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 블로킹 — defaults read 로 시스템 다크모드를 조회해 캐시에 반영.
+/// spawn_title_updater 폴링 스레드(30초)에서만 호출할 것.
 #[cfg(target_os = "macos")]
-fn is_dark_menubar() -> bool {
-    std::process::Command::new("defaults")
+fn refresh_dark_menubar_cache() {
+    let dark = std::process::Command::new("defaults")
         .args(["read", "-g", "AppleInterfaceStyle"])
         .output()
         .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("Dark"))
-        .unwrap_or(false)
+        .unwrap_or(false);
+    DARK_MENUBAR.store(dark, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(target_os = "macos")]
+fn is_dark_menubar() -> bool {
+    DARK_MENUBAR.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// OAuth 캐시의 windows → 트레이 표시 아이템. 리셋 경과 창은 생략(갱신 대기).
@@ -227,6 +239,8 @@ pub fn spawn_title_updater<R: Runtime>(app: AppHandle<R>) {
         if crate::commands::read_show_menubar_limits() {
             let _ = crate::oauth_usage::get_usage_blocking();
         }
+        #[cfg(target_os = "macos")]
+        refresh_dark_menubar_cache();
         refresh_tray_title(&app);
         std::thread::sleep(std::time::Duration::from_secs(30));
     });
