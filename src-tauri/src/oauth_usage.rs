@@ -10,17 +10,16 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UsageWindow {
-    pub utilization: f64,
-    pub resets_at: String,
+pub struct LimitWindow {
+    pub kind: String,               // "session" | "weekly_all" | "weekly_scoped" | (미래 확장)
+    pub scope_model: Option<String>, // weekly_scoped 일 때 모델 표시명 (예: "Fable")
+    pub utilization: f64,           // 사용률 % (0~100 클램프)
+    pub resets_at: String,          // RFC3339
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthUsage {
-    pub five_hour: Option<UsageWindow>,
-    pub seven_day: Option<UsageWindow>,
-    pub seven_day_sonnet: Option<UsageWindow>,
-    pub seven_day_opus: Option<UsageWindow>,
+    pub windows: Vec<LimitWindow>,
     pub fetched_at: String,
     pub is_stale: bool,
 }
@@ -33,28 +32,82 @@ struct CacheEntry {
 static OAUTH_CACHE: Mutex<Option<CacheEntry>> = Mutex::new(None);
 static RATE_LIMIT_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
 
+// API 가 필드를 null/부분 채움으로 반환하는 케이스가 있어 전부 Option.
+// 2026-07 응답 구조 변경: 모델 scoped 주간 한도는 `limits` 배열로만 내려온다
+// (seven_day_opus/sonnet 은 null). limits 우선, 없으면 legacy 필드 fallback.
 #[derive(Debug, Deserialize)]
 struct ApiResponse {
     five_hour: Option<ApiUsageWindow>,
     seven_day: Option<ApiUsageWindow>,
     seven_day_sonnet: Option<ApiUsageWindow>,
     seven_day_opus: Option<ApiUsageWindow>,
+    #[serde(default)]
+    limits: Vec<ApiLimit>,
 }
 
-// API 가 일부 window를 `null` 또는 부분적으로 채워 반환하는 케이스가 있어 모든 필드를 Option으로.
 #[derive(Debug, Deserialize)]
 struct ApiUsageWindow {
     utilization: Option<f64>,
     resets_at: Option<String>,
 }
 
-impl ApiUsageWindow {
-    fn into_usage(self) -> Option<UsageWindow> {
-        Some(UsageWindow {
-            utilization: self.utilization?,
-            resets_at: self.resets_at?,
+#[derive(Debug, Deserialize)]
+struct ApiLimit {
+    kind: Option<String>,
+    percent: Option<f64>,
+    resets_at: Option<String>,
+    scope: Option<ApiLimitScope>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiLimitScope {
+    model: Option<ApiScopeModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiScopeModel {
+    display_name: Option<String>,
+}
+
+fn windows_from_api(api: &ApiResponse) -> Vec<LimitWindow> {
+    let from_limits: Vec<LimitWindow> = api
+        .limits
+        .iter()
+        .filter_map(|l| {
+            Some(LimitWindow {
+                kind: l.kind.clone()?,
+                scope_model: l
+                    .scope
+                    .as_ref()
+                    .and_then(|s| s.model.as_ref())
+                    .and_then(|m| m.display_name.clone()),
+                utilization: l.percent?.clamp(0.0, 100.0),
+                resets_at: l.resets_at.clone()?,
+            })
         })
+        .collect();
+    if !from_limits.is_empty() {
+        return from_limits;
     }
+    // legacy fallback — limits 배열이 없던 구버전 응답 (API 롤백 대비)
+    let legacy: [(&str, Option<&str>, &Option<ApiUsageWindow>); 4] = [
+        ("session", None, &api.five_hour),
+        ("weekly_all", None, &api.seven_day),
+        ("weekly_scoped", Some("Sonnet"), &api.seven_day_sonnet),
+        ("weekly_scoped", Some("Opus"), &api.seven_day_opus),
+    ];
+    legacy
+        .into_iter()
+        .filter_map(|(kind, model, w)| {
+            let w = w.as_ref()?;
+            Some(LimitWindow {
+                kind: kind.to_string(),
+                scope_model: model.map(|m| m.to_string()),
+                utilization: w.utilization?.clamp(0.0, 100.0),
+                resets_at: w.resets_at.clone()?,
+            })
+        })
+        .collect()
 }
 
 fn read_oauth_token() -> Option<String> {
@@ -130,10 +183,7 @@ fn fetch_usage_from_api(token: &str) -> Result<OAuthUsage, String> {
         Ok(r) => {
             let api: ApiResponse = r.into_json().map_err(|e| format!("JSON parse: {e}"))?;
             Ok(OAuthUsage {
-                five_hour: api.five_hour.and_then(ApiUsageWindow::into_usage),
-                seven_day: api.seven_day.and_then(ApiUsageWindow::into_usage),
-                seven_day_sonnet: api.seven_day_sonnet.and_then(ApiUsageWindow::into_usage),
-                seven_day_opus: api.seven_day_opus.and_then(ApiUsageWindow::into_usage),
+                windows: windows_from_api(&api),
                 fetched_at: chrono::Local::now().to_rfc3339(),
                 is_stale: false,
             })
@@ -197,6 +247,16 @@ fn get_oauth_usage_impl(force: bool) -> Result<OAuthUsage, String> {
     Ok(usage)
 }
 
+/// 캐시된 사용량 읽기 — 네트워크 호출 없음. 트레이 즉시 경로(refresh_tray_title)용.
+pub fn cached_usage() -> Option<OAuthUsage> {
+    OAUTH_CACHE.lock().ok()?.as_ref().map(|e| e.usage.clone())
+}
+
+/// 10분 캐시 경유 fetch (만료 시에만 네트워크). blocking — 폴링 스레드 전용.
+pub fn get_usage_blocking() -> Result<OAuthUsage, String> {
+    get_oauth_usage_impl(false)
+}
+
 #[tauri::command]
 pub fn get_oauth_usage() -> Result<OAuthUsage, String> {
     get_oauth_usage_impl(false)
@@ -205,4 +265,83 @@ pub fn get_oauth_usage() -> Result<OAuthUsage, String> {
 #[tauri::command]
 pub fn refresh_oauth_usage() -> Result<OAuthUsage, String> {
     get_oauth_usage_impl(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 실제 응답 축약 fixture (2026-07-13 확인) — limits 배열 + null 이 된 legacy 필드.
+    const FIXTURE: &str = r#"{
+        "five_hour": {"utilization": 59.0, "resets_at": "2026-07-13T13:50:00+00:00"},
+        "seven_day": {"utilization": 17.0, "resets_at": "2026-07-20T08:00:00+00:00"},
+        "seven_day_sonnet": null,
+        "seven_day_opus": null,
+        "limits": [
+            {"kind": "session", "group": "session", "percent": 59, "severity": "normal",
+             "resets_at": "2026-07-13T13:50:00+00:00", "scope": null, "is_active": true},
+            {"kind": "weekly_all", "group": "weekly", "percent": 17, "severity": "normal",
+             "resets_at": "2026-07-20T08:00:00+00:00", "scope": null, "is_active": false},
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 127, "severity": "normal",
+             "resets_at": "2026-07-20T08:00:00+00:00",
+             "scope": {"model": {"id": null, "display_name": "Fable"}, "surface": null},
+             "is_active": false}
+        ]
+    }"#;
+
+    #[test]
+    fn parses_limits_array_including_fable_scope() {
+        let api: ApiResponse = serde_json::from_str(FIXTURE).unwrap();
+        let windows = windows_from_api(&api);
+        assert_eq!(windows.len(), 3);
+        assert_eq!(windows[0].kind, "session");
+        assert_eq!(windows[0].utilization, 59.0);
+        assert_eq!(windows[1].kind, "weekly_all");
+        assert_eq!(windows[2].kind, "weekly_scoped");
+        assert_eq!(windows[2].scope_model.as_deref(), Some("Fable"));
+        // percent 127 → 100 클램프
+        assert_eq!(windows[2].utilization, 100.0);
+    }
+
+    #[test]
+    fn skips_incomplete_limit_items() {
+        let api: ApiResponse = serde_json::from_str(
+            r#"{"limits":[
+                {"kind":"session","percent":null,"resets_at":"2026-07-13T13:50:00+00:00"},
+                {"kind":null,"percent":10,"resets_at":"2026-07-13T13:50:00+00:00"},
+                {"kind":"weekly_all","percent":10,"resets_at":null},
+                {"kind":"weekly_all","percent":10,"resets_at":"2026-07-20T08:00:00+00:00"}
+            ]}"#,
+        )
+        .unwrap();
+        let windows = windows_from_api(&api);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].kind, "weekly_all");
+    }
+
+    #[test]
+    fn falls_back_to_legacy_fields_when_limits_missing() {
+        // limits 키 자체가 없는 구버전 응답 — serde(default) 로 빈 Vec.
+        let api: ApiResponse = serde_json::from_str(
+            r#"{
+                "five_hour": {"utilization": 42.5, "resets_at": "2026-07-13T13:50:00+00:00"},
+                "seven_day": {"utilization": 18.0, "resets_at": "2026-07-20T08:00:00+00:00"},
+                "seven_day_sonnet": null,
+                "seven_day_opus": {"utilization": 3.0, "resets_at": "2026-07-20T08:00:00+00:00"}
+            }"#,
+        )
+        .unwrap();
+        let windows = windows_from_api(&api);
+        assert_eq!(windows.len(), 3);
+        assert_eq!(windows[0].kind, "session");
+        assert_eq!(windows[1].kind, "weekly_all");
+        assert_eq!(windows[2].kind, "weekly_scoped");
+        assert_eq!(windows[2].scope_model.as_deref(), Some("Opus"));
+    }
+
+    #[test]
+    fn empty_response_yields_no_windows() {
+        let api: ApiResponse = serde_json::from_str("{}").unwrap();
+        assert!(windows_from_api(&api).is_empty());
+    }
 }
