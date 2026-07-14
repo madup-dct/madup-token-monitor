@@ -27,8 +27,8 @@ const GLOW: Record<QuotaSignal, string> = {
   coral: "0 0 8px rgba(255,107,92,0.45)",
 };
 
-/// 12-세그먼트 quota meter — 사용률만큼 채우고(usage meter), 신호색은 잔여 비율(1-value)
-/// 기준: 많이 쓸수록 lime→amber→coral. 마지막 부분 채움은 dim 으로.
+/// 12-세그먼트 quota meter — 사용률만큼 채우고(usage meter), 신호색은 사용률 기준:
+/// 많이 쓸수록 lime→orange→coral. 마지막 부분 채움은 dim 으로.
 export function QuotaSegBar({
   value,
   segments = 12,
@@ -36,7 +36,7 @@ export function QuotaSegBar({
   label = "사용 한도",
 }: QuotaSegBarProps) {
   const clamped = value === null ? 0 : Math.max(0, Math.min(1, value));
-  const signal = pickQuotaSignal(1 - clamped);
+  const signal = pickQuotaSignal(clamped);
   const exact = clamped * segments;
   const full = Math.floor(exact);
   const partial = exact - full > 0 && full < segments;

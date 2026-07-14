@@ -24,11 +24,11 @@ pub const GREEN: [u8; 4] = [52, 199, 89, 255]; // systemGreen
 pub const ORANGE: [u8; 4] = [255, 149, 0, 255]; // systemOrange (40~70% 잔여)
 pub const RED: [u8; 4] = [255, 59, 48, 255]; // systemRed
 
-/// 잔여 기준 3단계 상태색 — 앱(quotaSignal)과 동일 임계값 (≥70 여유 / ≥40 주의 / <40 위험).
-pub fn band_color(remaining_pct: f64) -> [u8; 4] {
-    if remaining_pct >= 70.0 {
+/// 사용률 기준 3단계 상태색 — 앱(quotaSignal)과 동일 임계값 (usage <40 여유 / <70 주의 / ≥70 위험).
+pub fn band_color(used_pct: f64) -> [u8; 4] {
+    if used_pct < 40.0 {
         GREEN
-    } else if remaining_pct >= 40.0 {
+    } else if used_pct < 70.0 {
         ORANGE
     } else {
         RED
@@ -110,24 +110,35 @@ impl Canvas {
     }
 }
 
-/// 배터리 셀 총 폭 (body + nub). 폭 측정과 드로잉이 같은 값을 쓰도록 단일 소스.
-fn battery_width(bat_h: f32) -> f32 {
-    bat_h * 1.9 + bat_h * 0.28
+/// 배터리 nub 폭 (단자). body 우측에 붙는다.
+fn battery_nub_w(bat_h: f32) -> f32 {
+    bat_h * 0.06 + bat_h * 0.2
 }
 
-/// 배터리 모양 레벨 표시 — 옆 메뉴바 아이콘과 톤을 맞추려 아이콘형(중립 트랙 + 상태색 채움).
-/// track(빈 부분) 위에 usage 만큼 fill 을 채우고 오른쪽에 nub. fill 색은 잔여 기준 상태색.
+/// n% 텍스트가 안에 들어가도록 body 폭을 텍스트 폭 기준으로 산정 (측정·드로잉 단일 소스).
+fn battery_body_w(f: &Font, num_text: &str, inner_px: f32, bat_h: f32) -> f32 {
+    (text_width(f, num_text, inner_px) + bat_h * 0.85).max(bat_h * 1.5)
+}
+
+/// 배터리 셀 렌더 — 중립 트랙 + usage 만큼 상태색 채움 + nub + 가운데 n% 텍스트.
+/// fill 색은 사용률 기준 상태색. 텍스트는 halo 로 채움/트랙 위 어디서나 가독성 확보.
+#[allow(clippy::too_many_arguments)]
 fn draw_battery(
     canvas: &mut Canvas,
+    f: &Font,
     x: f32,
     y: f32,
+    body_w: f32,
     bat_h: f32,
     usage_frac: f32,
+    num_text: &str,
+    inner_px: f32,
     track: [u8; 4],
     fill: [u8; 4],
+    text_color: [u8; 4],
+    halo: [u8; 4],
 ) {
-    let body_w = bat_h * 1.9;
-    let r = bat_h * 0.3;
+    let r = bat_h * 0.28;
     canvas.fill_round_rect(x, y, body_w, bat_h, r, track);
     let fw = (body_w * usage_frac.clamp(0.0, 1.0)).min(body_w);
     if fw > 0.5 {
@@ -143,6 +154,11 @@ fn draw_battery(
         nub_w * 0.4,
         track,
     );
+    // 가운데 정렬 n% — baseline 을 body 높이의 ~0.71 로.
+    let num_w = text_width(f, num_text, inner_px);
+    let tx = x + (body_w - num_w) / 2.0;
+    let baseline = y + bat_h * 0.71;
+    draw_text_with_halo(canvas, f, num_text, tx, baseline, inner_px, text_color, halo);
 }
 
 fn text_width(f: &Font, text: &str, px: f32) -> f32 {
@@ -255,12 +271,14 @@ pub fn render_status_strip(
     };
     let gap = 5.0 * SCALE as f32; // 로고↔본문
     let label_gap = 3.0 * SCALE as f32; // 라벨↔배터리
-    let sep = 8.0 * SCALE as f32; // 항목 간
-    let bat_h = h as f32 * 0.5;
-    let bat_w = battery_width(bat_h);
+    let sep = 7.0 * SCALE as f32; // 항목 간
+    // 배터리를 크게 — 안에 n% 텍스트가 들어가도록 스트립 높이의 대부분을 차지.
+    let bat_h = h as f32 * 0.86;
+    let inner_px = bat_h * 0.6; // 배터리 안 n% 폰트
     let bat_y = (h as f32 - bat_h) / 2.0;
     // 배터리 빈 트랙은 텍스트색의 중립 저채도 — 옆 메뉴바 아이콘과 톤 통일.
-    let track_color = [text_color[0], text_color[1], text_color[2], 64];
+    let track_color = [text_color[0], text_color[1], text_color[2], 70];
+    let num_text = |item: &TrayItem| format!("{}%", item.used_pct.round() as i64);
 
     // 1) 폭 측정
     let logo = logo_rgba.map(|(buf, w0, h0)| resize_rgba(buf, w0, h0, h));
@@ -272,7 +290,8 @@ pub fn render_status_strip(
         w += text_width(f, cost, px) + sep;
     }
     for (i, item) in items.iter().enumerate() {
-        w += text_width(f, &item.label, px) + label_gap + bat_w;
+        let body_w = battery_body_w(f, &num_text(item), inner_px, bat_h);
+        w += text_width(f, &item.label, px) + label_gap + body_w + battery_nub_w(bat_h);
         if i + 1 < items.len() {
             w += sep;
         }
@@ -314,10 +333,25 @@ pub fn render_status_strip(
             halo_color,
         ) + label_gap;
         let usage = (item.used_pct / 100.0).clamp(0.0, 1.0) as f32;
-        // fill 색은 잔여(100-사용률) 기준 상태색.
-        let fill = band_color(100.0 - item.used_pct);
-        draw_battery(&mut canvas, pen, bat_y, bat_h, usage, track_color, fill);
-        pen += bat_w;
+        let fill = band_color(item.used_pct); // 색은 사용률 기준
+        let num = num_text(item);
+        let body_w = battery_body_w(f, &num, inner_px, bat_h);
+        draw_battery(
+            &mut canvas,
+            f,
+            pen,
+            bat_y,
+            body_w,
+            bat_h,
+            usage,
+            &num,
+            inner_px,
+            track_color,
+            fill,
+            text_color,
+            halo_color,
+        );
+        pen += body_w + battery_nub_w(bat_h);
         if i + 1 < items.len() {
             pen += sep;
         }
@@ -354,11 +388,11 @@ mod tests {
 
     #[test]
     fn band_color_matches_thresholds() {
-        // 잔여 기준: ≥70 green / 40~70 orange / <40 red.
-        assert_eq!(band_color(92.0), GREEN);
-        assert_eq!(band_color(70.0), GREEN);
-        assert_eq!(band_color(69.9), ORANGE);
+        // 사용률 기준: <40 green / 40~70 orange / ≥70 red.
+        assert_eq!(band_color(0.0), GREEN);
+        assert_eq!(band_color(39.9), GREEN);
         assert_eq!(band_color(40.0), ORANGE);
-        assert_eq!(band_color(39.9), RED);
+        assert_eq!(band_color(69.9), ORANGE);
+        assert_eq!(band_color(70.0), RED);
     }
 }

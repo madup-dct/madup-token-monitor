@@ -75,12 +75,14 @@ function AccountRow({
   const updatedMs = new Date(row.updated_at).getTime();
   const stale = !Number.isFinite(updatedMs) || nowMs - updatedMs > STALE_MS;
   const min = minRemaining(row.windows);
+  // 행 상태 점 = 가장 많이 쓴(최악) 창의 사용률.
+  const worstUsed = min === null ? null : (100 - min) / 100;
 
   return (
     <div
       className={`mc-card flex items-center gap-4 px-4 py-3 ${stale ? "opacity-50" : ""}`}
     >
-      <StatusDot remaining={min === null ? null : min / 100} size={9} />
+      <StatusDot used={worstUsed} size={9} />
       <div className="min-w-0 w-44 shrink-0">
         <div className="text-[13px] font-semibold text-text-primary truncate">
           {row.owner_name ?? row.owner_email}
@@ -101,7 +103,7 @@ function AccountRow({
                 <span className="text-[10.5px] font-semibold text-text-secondary">
                   {windowShortLabel(w)}
                 </span>
-                <span className={`num text-[11.5px] ${quotaSignalClass((100 - used) / 100)}`}>
+                <span className={`num text-[11.5px] ${quotaSignalClass(used / 100)}`}>
                   {used}%
                 </span>
               </div>

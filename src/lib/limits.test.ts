@@ -16,14 +16,14 @@ function w(kind: string, utilization: number, scope_model: string | null = null)
   return { kind, scope_model, utilization, resets_at: "2026-07-20T08:00:00+00:00" };
 }
 
-describe("pickQuotaSignal (잔여 기준)", () => {
-  it("잔여 ≥70% 초록 / 40~70% 주황 / <40% 빨강", () => {
-    expect(pickQuotaSignal(0.92)).toBe("lime");
-    expect(pickQuotaSignal(0.7)).toBe("lime");
-    expect(pickQuotaSignal(0.69)).toBe("orange");
+describe("pickQuotaSignal (사용률 기준)", () => {
+  it("사용률 <40% 초록 / 40~70% 주황 / ≥70% 빨강", () => {
+    expect(pickQuotaSignal(0)).toBe("lime");
+    expect(pickQuotaSignal(0.39)).toBe("lime");
     expect(pickQuotaSignal(0.4)).toBe("orange");
-    expect(pickQuotaSignal(0.39)).toBe("coral");
-    expect(pickQuotaSignal(0)).toBe("coral");
+    expect(pickQuotaSignal(0.69)).toBe("orange");
+    expect(pickQuotaSignal(0.7)).toBe("coral");
+    expect(pickQuotaSignal(0.92)).toBe("coral");
   });
 });
 

@@ -102,9 +102,8 @@ function LimitRow({
   readonly resetMs: number | null;
   readonly nowMs: number;
 }) {
-  // 표기 숫자·게이지 채움은 사용률, 상태 점·숫자 색은 잔여 기준 (2026-07-14 통일).
+  // 표기 숫자·게이지 채움·상태색 모두 사용률 기준 (2026-07-14 통일).
   const used = usedPercent === null ? null : Math.min(1, Math.max(0, usedPercent / 100));
-  const remaining = used === null ? null : 1 - used;
   const resetLabel = resetMs === null ? "갱신 대기" : `리셋 ${formatResetKo(resetMs)}`;
   const resetTitle =
     resetMs === null ? undefined : `${formatRelativeTimeKo(resetMs - nowMs)} 후 초기화`;
@@ -112,7 +111,7 @@ function LimitRow({
     <div className="mt-4 first:mt-1">
       <div className="flex items-center justify-between mb-2 gap-3">
         <span className="flex items-center gap-2 min-w-0">
-          <StatusDot remaining={remaining} />
+          <StatusDot used={used} />
           <span className="text-[12px] font-semibold text-text-primary truncate" title={label}>
             {label}
           </span>
@@ -123,7 +122,7 @@ function LimitRow({
         >
           {resetLabel}
           <strong
-            className={`num text-[13px] font-medium ${remaining === null ? "text-text-faint" : quotaSignalClass(remaining)}`}
+            className={`num text-[13px] font-medium ${used === null ? "text-text-faint" : quotaSignalClass(used)}`}
           >
             {usedPercent === null ? "—" : `사용 ${usedPercent}%`}
           </strong>
