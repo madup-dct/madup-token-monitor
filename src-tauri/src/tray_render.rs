@@ -7,14 +7,18 @@ use fontdue::{Font, FontSettings};
 use std::sync::OnceLock;
 
 pub struct TrayItem {
-    pub label: String,      // "5h" | "7d" | "F"
-    pub remaining_pct: f64, // 잔여 % 0..100
+    pub label: String, // "5h" | "7d" | "F"
+    /// 사용률 % 0..100. 표시 숫자는 사용률(클로드 사용량 페이지와 동일 의미 — 2026-07-14
+    /// 사용자 결정), 상태 점 색은 잔여(100-사용률) 기준 유지.
+    pub used_pct: f64,
 }
 
 /// Retina 스케일. 실기기에서 아이콘이 너무 크게/흐리게 보이면 1 로 조정 (스펙 §2 리스크).
 pub const SCALE: u32 = 2;
 const BASE_H: u32 = 18; // 메뉴바 논리 높이(pt)
-const FONT_PT: f32 = 11.0;
+// 메뉴바가 이미지를 바 높이에 맞춰 축소하므로 폰트를 스트립 높이 대비 크게 잡아야
+// 실표시 크기가 시스템 텍스트와 비슷해진다 (11pt 는 실기기에서 너무 작았음 — 2026-07-14).
+const FONT_PT: f32 = 13.5;
 
 pub const GREEN: [u8; 4] = [52, 199, 89, 255]; // systemGreen
 pub const YELLOW: [u8; 4] = [255, 204, 0, 255]; // systemYellow
@@ -166,12 +170,13 @@ pub fn render_status_strip(
     let f = font()?;
     let h = BASE_H * SCALE;
     let px = FONT_PT * SCALE as f32;
+    // 알파를 낮추면 밝은 배경화면 위에서 흐릿해진다 — 불투명이 가독성에 유리.
     let text_color: [u8; 4] = if dark_menubar {
-        [255, 255, 255, 230]
+        [255, 255, 255, 255]
     } else {
-        [0, 0, 0, 220]
+        [0, 0, 0, 255]
     };
-    let dot_r = 3.0 * SCALE as f32;
+    let dot_r = 3.5 * SCALE as f32;
     let gap = 5.0 * SCALE as f32;
     let sep = 9.0 * SCALE as f32;
 
@@ -216,7 +221,7 @@ pub fn render_status_strip(
         pen = draw_text(&mut canvas, f, cost, pen, baseline, px, text_color) + sep;
     }
     for (i, item) in items.iter().enumerate() {
-        canvas.fill_circle(pen + dot_r, dot_cy, dot_r, dot_color(item.remaining_pct));
+        canvas.fill_circle(pen + dot_r, dot_cy, dot_r, dot_color(100.0 - item.used_pct));
         pen += dot_r * 2.0 + gap * 0.6;
         pen = draw_text(&mut canvas, f, &item_text(item), pen, baseline, px, text_color);
         if i + 1 < items.len() {
@@ -227,7 +232,7 @@ pub fn render_status_strip(
 }
 
 fn item_text(item: &TrayItem) -> String {
-    format!("{} {}", item.label, item.remaining_pct.round() as i64)
+    format!("{} {}", item.label, item.used_pct.round() as i64)
 }
 
 #[cfg(test)]
@@ -239,9 +244,9 @@ mod tests {
     #[test]
     fn renders_strip_with_expected_height() {
         let items = vec![
-            TrayItem { label: "5h".into(), remaining_pct: 92.0 },
-            TrayItem { label: "7d".into(), remaining_pct: 58.0 },
-            TrayItem { label: "F".into(), remaining_pct: 22.0 },
+            TrayItem { label: "5h".into(), used_pct: 8.0 },
+            TrayItem { label: "7d".into(), used_pct: 42.0 },
+            TrayItem { label: "F".into(), used_pct: 78.0 },
         ];
         let (buf, w, h) =
             render_status_strip(None, Some("$12"), &items, true).expect("font should load");

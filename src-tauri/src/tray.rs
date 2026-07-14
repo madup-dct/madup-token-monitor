@@ -60,7 +60,7 @@ fn tray_items_from_usage(
             };
             Some(crate::tray_render::TrayItem {
                 label,
-                remaining_pct: (100.0 - w.utilization).clamp(0.0, 100.0),
+                used_pct: w.utilization.clamp(0.0, 100.0),
             })
         })
         .collect()
@@ -153,7 +153,7 @@ pub fn refresh_tray_title<R: Runtime>(app: &AppHandle<R>) {
                 cost_text,
                 items
                     .iter()
-                    .map(|i| format!("{}{}", i.label, i.remaining_pct.round()))
+                    .map(|i| format!("{}{}", i.label, i.used_pct.round()))
                     .collect::<Vec<_>>()
                     .join(","),
                 dark
@@ -212,7 +212,7 @@ pub fn refresh_tray_title<R: Runtime>(app: &AppHandle<R>) {
                     parts.push(
                         items
                             .iter()
-                            .map(|i| format!("{} {}%", i.label, i.remaining_pct.round() as i64))
+                            .map(|i| format!("{} {}%", i.label, i.used_pct.round() as i64))
                             .collect::<Vec<_>>()
                             .join(" · "),
                     );
