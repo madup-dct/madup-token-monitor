@@ -200,11 +200,24 @@ pub fn refresh_other_devices_cost_if_stale() {
 /// 마지막으로 업로드한 스냅샷의 fetched_at — 같은 데이터 재업로드 방지.
 static LAST_LIMITS_UPLOAD: Mutex<Option<String>> = Mutex::new(None);
 
+/// 업로드 실패 시 재시도 쿨다운 — 마이그레이션 미적용/네트워크 장애 중 30초 폴링마다
+/// 같은 요청이 반복되는 것을 막는다 (refresh_other_devices_cost_if_stale 의 실패 쿨다운과 동일 취지).
+static LIMITS_UPLOAD_COOLDOWN_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
+const LIMITS_UPLOAD_FAILURE_COOLDOWN: Duration = Duration::from_secs(300);
+
 /// 계정 단위 Claude 한도 스냅샷을 Supabase 에 upsert.
 /// blocking(ureq) — 30초 폴링 스레드(spawn_title_updater) 전용. 파싱 경로에서 호출 금지.
 /// 동의 토글 없음 — 로그인 상태면 항상 업로드 (스펙 §4.3, 2026-07-13 기획 확정).
 /// OAuth 캐시(10분)가 갱신됐을 때만 실제 네트워크 업로드가 발생한다 (fetched_at dedup).
 pub fn upload_limit_snapshot_if_fresh() {
+    // 실패 쿨다운 중이면 skip — 5분 후 재시도.
+    if let Ok(guard) = LIMITS_UPLOAD_COOLDOWN_UNTIL.lock() {
+        if let Some(until) = *guard {
+            if Instant::now() < until {
+                return;
+            }
+        }
+    }
     let session = {
         let Ok(guard) = SESSION.lock() else { return };
         match guard.as_ref() {
@@ -253,8 +266,16 @@ pub fn upload_limit_snapshot_if_fresh() {
             if let Ok(mut guard) = LAST_LIMITS_UPLOAD.lock() {
                 *guard = Some(usage.fetched_at);
             }
+            if let Ok(mut guard) = LIMITS_UPLOAD_COOLDOWN_UNTIL.lock() {
+                *guard = None;
+            }
         }
-        Err(e) => eprintln!("[limit-snapshot] upload failed: {e}"),
+        Err(e) => {
+            eprintln!("[limit-snapshot] upload failed: {e}");
+            if let Ok(mut guard) = LIMITS_UPLOAD_COOLDOWN_UNTIL.lock() {
+                *guard = Some(Instant::now() + LIMITS_UPLOAD_FAILURE_COOLDOWN);
+            }
+        }
     }
 }
 
