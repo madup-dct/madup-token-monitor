@@ -1,0 +1,35 @@
+name: gitleaks
+
+# public repo 라 GitHub Actions 실행이 무료다 (과거 CI 비용 폭주는 macOS 빌드 러너 때문이었고
+# 이 job 은 ubuntu). 노출 예방은 GitHub Push Protection 이 담당하고, 이 CI 는 제네릭 패턴·전체
+# 히스토리까지 훑는 사후 백스톱이다 (push 이후 실행이라 예방이 아니라 탐지).
+#
+# ⚠️ 공식 gitleaks-action 은 조직(madup-dct) 소유 repo 에 유료 라이선스를 요구하므로,
+#    라이선스가 필요 없는 gitleaks CLI 바이너리를 직접 내려받아 실행한다.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks git 이 전체 커밋 히스토리를 스캔하려면 필요
+
+      - name: Scan for secrets (gitleaks)
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" version
+          # 누출 발견 시 exit 1 로 job 실패
+          "$RUNNER_TEMP/gitleaks" git --redact --no-banner -v -c .gitleaks.toml
