@@ -207,6 +207,6 @@ create table claude_owner (
 
 - 이모지 상태 표시 — 크기 문제로 제외 (사용자 피드백). 트레이는 이미지 렌더,
   패널/계정 한도 페이지는 CSS 상태 점으로 대체.
-- Codex 트레이 표시 — 트레이는 Claude 창만. (패널의 Codex 행 표기 통일은 포함.)
+- Codex 트레이 표시 — 트레이는 Claude 창만. Codex는 패널과 계정 한도 페이지에서 표시.
 - `claude_owner` 매핑 관리 UI — v1 은 Supabase 직접 관리, 필요 시 후속.
 - 쉐어 요청 자동화(Slack 알림 등) — 열람까지만. 요청은 사람이 직접.

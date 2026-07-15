@@ -54,24 +54,26 @@ export function minRemaining(windows: readonly LimitWindow[]): number | null {
 
 export type SortKind = "session" | "weekly_all" | "weekly_scoped";
 
-export function windowOfKind(
-  windows: readonly LimitWindow[],
-  kind: SortKind,
-): LimitWindow | null {
+export function windowOfKind(windows: readonly LimitWindow[], kind: SortKind): LimitWindow | null {
   return windows.find((w) => w.kind === kind) ?? null;
+}
+
+function remainingForKind(windows: readonly LimitWindow[], kind: SortKind): number | null {
+  const matching = windows.filter((window) => window.kind === kind);
+  return matching.length === 0
+    ? null
+    : Math.min(...matching.map((window) => remainingPct(window.utilization)));
 }
 
 /// 잔여 많은 순 정렬 — "쉐어 요청할 계정" 이 위로. 해당 창이 없는 row 는 마지막.
 export function sortByRemainingDesc<T>(
   rows: readonly T[],
   windowsOf: (row: T) => readonly LimitWindow[],
-  kind: SortKind,
+  kind: SortKind
 ): T[] {
   return [...rows].sort((a, b) => {
-    const wa = windowOfKind(windowsOf(a), kind);
-    const wb = windowOfKind(windowsOf(b), kind);
-    const va = wa ? remainingPct(wa.utilization) : -1;
-    const vb = wb ? remainingPct(wb.utilization) : -1;
+    const va = remainingForKind(windowsOf(a), kind) ?? -1;
+    const vb = remainingForKind(windowsOf(b), kind) ?? -1;
     return vb - va;
   });
 }

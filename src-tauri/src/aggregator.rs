@@ -31,6 +31,18 @@ struct SupabaseSession {
 
 static SESSION: Mutex<Option<SupabaseSession>> = Mutex::new(None);
 
+pub(crate) fn post_supabase_rpc(rpc: &str, body: serde_json::Value) -> Option<Result<(), String>> {
+    let session = SESSION.lock().ok()?.as_ref()?.clone();
+    let url = format!("{}/rest/v1/rpc/{rpc}", session.supabase_url);
+    let response = ureq::post(&url)
+        .set("apikey", &session.publishable_key)
+        .set("Authorization", &format!("Bearer {}", session.access_token))
+        .set("Content-Type", "application/json")
+        .timeout(Duration::from_secs(10))
+        .send_json(body);
+    Some(response.map(|_| ()).map_err(|error| error.to_string()))
+}
+
 fn store_session(session: SupabaseSession) {
     if let Ok(mut guard) = SESSION.lock() {
         *guard = Some(session);
@@ -175,7 +187,9 @@ pub fn refresh_other_devices_cost_if_stale() {
             eprintln!("[tray-cost] remote fetch failed: {e}");
             // 직전 성공값의 맥락(date/user)을 유지한 채 시도 시각만 갱신 —
             // 자정/사용자 전환 시 읽기 측 검증이 자연 무효화한다.
-            let Ok(mut guard) = OTHER_DEVICE_COST.lock() else { return };
+            let Ok(mut guard) = OTHER_DEVICE_COST.lock() else {
+                return;
+            };
             if let Some(c) = guard.as_mut() {
                 c.fetched_at = Instant::now();
             }
@@ -236,7 +250,9 @@ pub fn upload_limit_snapshot_if_fresh() {
         return;
     }
     {
-        let Ok(guard) = LAST_LIMITS_UPLOAD.lock() else { return };
+        let Ok(guard) = LAST_LIMITS_UPLOAD.lock() else {
+            return;
+        };
         if guard.as_deref() == Some(usage.fetched_at.as_str()) {
             return; // 캐시 미갱신 — 이미 올린 스냅샷
         }
@@ -372,7 +388,10 @@ struct HourlyRow {
 fn local_date_string(ts_ms: i64) -> Option<String> {
     let secs = ts_ms / 1000;
     let nanos = ((ts_ms % 1000) * 1_000_000) as u32;
-    Local.timestamp_opt(secs, nanos).single().map(|dt| dt.format("%Y-%m-%d").to_string())
+    Local
+        .timestamp_opt(secs, nanos)
+        .single()
+        .map(|dt| dt.format("%Y-%m-%d").to_string())
 }
 
 /// unix_ms 를 UTC 정시(hour) 버킷 RFC3339 문자열로 (예: "2026-06-02T08:00:00Z").
@@ -468,7 +487,9 @@ fn read_tool_calls(
 
     for r in rows.flatten() {
         let (ts, mcp_server, plugin_id) = r;
-        let Some(date) = local_date_string(ts) else { continue };
+        let Some(date) = local_date_string(ts) else {
+            continue;
+        };
         if let Some(server) = mcp_server {
             *mcp.entry((date.clone(), server)).or_insert(0) += 1;
         }
@@ -537,7 +558,9 @@ fn read_usage_hourly(user_id: &str, device_id: &str) -> Result<Vec<HourlyRow>, S
 
     for r in rows.flatten() {
         let (ts, source, model, inp, out, cr, cw, cost) = r;
-        let Some(hour) = utc_hour_string(ts) else { continue };
+        let Some(hour) = utc_hour_string(ts) else {
+            continue;
+        };
         let entry = acc
             .entry((hour, source, model.unwrap_or_default()))
             .or_insert((0, 0, 0, 0, 0.0, 0));
@@ -672,7 +695,9 @@ fn collect_dirty_tool(
     let mut tool = HashSet::new();
     for r in rows.flatten() {
         let (ts, mcp_server, plugin_id, tool_name) = r;
-        let Some(date) = local_date_string(ts) else { continue };
+        let Some(date) = local_date_string(ts) else {
+            continue;
+        };
         if let Some(s) = mcp_server {
             mcp.insert((date.clone(), s));
         }
@@ -775,13 +800,26 @@ pub async fn sync_aggregates_now(
     // ── 증분 sync 준비 ──────────────────────────────────────────────────────
     // 현재 MAX(id) + 마지막 sync 워터마크를 읽고, 변경분이 건드린 버킷(dirty)만 수집.
     // 워터마크 None = 최초 sync 또는 recalc 리셋 → 필터 없이 전체 업로드(백필).
-    let (cur_max_usage, cur_max_tool, gen_before, dirty_daily, dirty_hourly, dirty_mcp, dirty_plugin, dirty_tool) = {
+    let (
+        cur_max_usage,
+        cur_max_tool,
+        gen_before,
+        dirty_daily,
+        dirty_hourly,
+        dirty_mcp,
+        dirty_plugin,
+        dirty_tool,
+    ) = {
         let conn = db::open().map_err(|e| e.to_string())?;
         let cur_max_usage: i64 = conn
-            .query_row("SELECT COALESCE(MAX(id),0) FROM usage_events", [], |r| r.get(0))
+            .query_row("SELECT COALESCE(MAX(id),0) FROM usage_events", [], |r| {
+                r.get(0)
+            })
             .map_err(|e| e.to_string())?;
         let cur_max_tool: i64 = conn
-            .query_row("SELECT COALESCE(MAX(id),0) FROM tool_calls", [], |r| r.get(0))
+            .query_row("SELECT COALESCE(MAX(id),0) FROM tool_calls", [], |r| {
+                r.get(0)
+            })
             .map_err(|e| e.to_string())?;
         // 워터마크는 "이 로컬 DB 가 어떤 user_id 명의로 어디까지 업로드됐나" — 계정이
         // 바뀌면 새 계정 명의의 전체 백필이 필요하므로 무시한다 (force 도 동일 효과).
@@ -829,7 +867,16 @@ pub async fn sync_aggregates_now(
             }
             None => (None, None, None),
         };
-        (cur_max_usage, cur_max_tool, gen_before, dirty_daily, dirty_hourly, dirty_mcp, dirty_plugin, dirty_tool)
+        (
+            cur_max_usage,
+            cur_max_tool,
+            gen_before,
+            dirty_daily,
+            dirty_hourly,
+            dirty_mcp,
+            dirty_plugin,
+            dirty_tool,
+        )
     };
 
     // 집계는 기존대로 전체 이벤트 기준 — 업로드 직전에 dirty 버킷만 retain.
@@ -839,16 +886,22 @@ pub async fn sync_aggregates_now(
         |r| (r.date.clone(), r.source.clone()),
     );
     let (mcp, plugins) = read_tool_calls(&user_id, &device_id)?;
-    let mcp = retain_dirty(mcp, dirty_mcp.as_ref(), |r| (r.date.clone(), r.mcp_server.clone()));
+    let mcp = retain_dirty(mcp, dirty_mcp.as_ref(), |r| {
+        (r.date.clone(), r.mcp_server.clone())
+    });
     let plugins = retain_dirty(plugins, dirty_plugin.as_ref(), |r| {
         (r.date.clone(), r.plugin_id.clone())
     });
-    let hourly = retain_dirty(read_usage_hourly(&user_id, &device_id)?, dirty_hourly.as_ref(), |r| {
-        (r.hour_utc.clone(), r.source.clone(), r.model.clone())
-    });
-    let tools = retain_dirty(read_tool_usage(&user_id, &device_id)?, dirty_tool.as_ref(), |r| {
-        (r.date.clone(), r.tool_name.clone())
-    });
+    let hourly = retain_dirty(
+        read_usage_hourly(&user_id, &device_id)?,
+        dirty_hourly.as_ref(),
+        |r| (r.hour_utc.clone(), r.source.clone(), r.model.clone()),
+    );
+    let tools = retain_dirty(
+        read_tool_usage(&user_id, &device_id)?,
+        dirty_tool.as_ref(),
+        |r| (r.date.clone(), r.tool_name.clone()),
+    );
 
     let usage_n = upsert(
         &supabase_url,
@@ -905,8 +958,7 @@ pub async fn sync_aggregates_now(
                 .map_err(|e| e.to_string())?;
             db::set_sync_state(&tx, db::SYNC_WM_TOOL, &cur_max_tool.to_string())
                 .map_err(|e| e.to_string())?;
-            db::set_sync_state(&tx, db::SYNC_LAST_USER, &user_id)
-                .map_err(|e| e.to_string())?;
+            db::set_sync_state(&tx, db::SYNC_LAST_USER, &user_id).map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;
         } else {
             eprintln!("[sync] cost recalc occurred mid-sync — watermark not advanced (next sync re-uploads)");

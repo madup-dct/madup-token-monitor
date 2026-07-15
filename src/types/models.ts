@@ -82,12 +82,15 @@ export interface LimitWindow {
   resets_at: string; // RFC3339
 }
 
-/// get_claude_account_limits RPC row — 계정 한도 페이지.
-export interface ClaudeAccountLimitRow {
-  account_uuid: string;
+export type AccountLimitProvider = "claude" | "codex";
+
+export interface AccountLimitRow {
+  provider: AccountLimitProvider;
+  account_id: string;
   account_email: string;
   owner_email: string;
   owner_name: string | null;
+  plan_type: string | null;
   windows: LimitWindow[];
   fetched_at: string;
   updated_at: string;

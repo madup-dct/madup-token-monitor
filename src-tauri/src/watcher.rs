@@ -94,9 +94,13 @@ fn notify_change(app: &AppHandle, last_emit: &LastEmit) {
 
 fn watch_dirs() -> Vec<PathBuf> {
     let home = home_dir();
+    watch_dirs_for(&home, crate::codex_limits::codex_home())
+}
+
+fn watch_dirs_for(home: &Path, codex_home: &Path) -> Vec<PathBuf> {
     let mut dirs = vec![
         home.join(".claude").join("projects"),
-        home.join(".codex").join("sessions"),
+        codex_home.join("sessions"),
     ];
 
     // OpenCode: macOS uses ~/.local/share, Windows uses %LOCALAPPDATA%
@@ -237,8 +241,14 @@ fn persist(
 }
 
 fn detect_source(path: &Path) -> String {
+    detect_source_for(path, &crate::codex_limits::codex_home().join("sessions"))
+}
+
+fn detect_source_for(path: &Path, codex_sessions: &Path) -> String {
     let s = path.to_string_lossy();
-    if s.contains(".claude") {
+    if path.starts_with(codex_sessions) {
+        "codex".to_owned()
+    } else if s.contains(".claude") {
         "claude".to_owned()
     } else if s.contains(".codex") {
         "codex".to_owned()
@@ -266,7 +276,24 @@ fn extract_session_id(path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{reset_if_truncated, FileState};
+    use super::{detect_source_for, reset_if_truncated, watch_dirs_for, FileState};
+    use std::path::Path;
+
+    #[test]
+    fn configured_codex_home_is_watched_and_classified_as_codex() {
+        // Given: Codex is running from an isolated home with another account token.
+        let home = Path::new("/users/example");
+        let codex_home = Path::new("/runtime/codex-home");
+        let session = codex_home.join("sessions/2026/07/15/rollout.jsonl");
+
+        // When: the watcher resolves its roots and classifies that session.
+        let dirs = watch_dirs_for(home, codex_home);
+        let source = detect_source_for(&session, &codex_home.join("sessions"));
+
+        // Then: usage from the configured Codex home enters the Codex pipeline.
+        assert!(dirs.contains(&codex_home.join("sessions")));
+        assert_eq!(source, "codex");
+    }
 
     #[test]
     fn truncated_file_resets_offset_and_parser_state() {

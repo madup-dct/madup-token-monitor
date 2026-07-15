@@ -574,6 +574,9 @@ The two-tier philosophy is the same as any modern dashboard: **interactive eleme
 - No automatic rotation. A data source must never change without a user action
 - `Claude` shows OAuth 5h/7d limits when available. `Codex` shows the latest account `rate_limits.used_percent` recorded in Codex rollout events, including each window and model-specific limit. A window whose reset time has passed is labeled `갱신 대기` instead of displaying the stale percentage
 - `통합` shows absolute Claude + Codex token summaries because percentages from different provider contracts cannot be added. Claude OAuth percentages must never be relabeled as Codex data
+- The `계정 한도` page combines team-visible Claude and Codex account snapshots in one list. Every row carries an explicit provider badge, Codex plan metadata when present, and a provider-qualified identity key
+- Account-limit sorting compares normalized 5h, weekly, or model-specific windows. When an account has multiple model windows, its lowest remaining model allowance determines its sort position
+- Codex ownership resolves through the stable account-ID override. Without an override, the immutable original uploader's team is the fallback owner scope; an override replaces that fallback with the explicitly mapped owner team
 - Keyboard: every arrow and dot is a native button with a source-specific accessible name; focus stays on the activated control after rotation
 - Reduced motion: replace the slide with the existing cross-fade fallback and retain the same content order
 

@@ -20,8 +20,8 @@ describe("pickQuotaSignal (사용률 기준)", () => {
   it("사용률 <40% 초록 / 40~70% 주황 / ≥70% 빨강", () => {
     expect(pickQuotaSignal(0)).toBe("lime");
     expect(pickQuotaSignal(0.39)).toBe("lime");
-    expect(pickQuotaSignal(0.4)).toBe("orange");
-    expect(pickQuotaSignal(0.69)).toBe("orange");
+    expect(pickQuotaSignal(0.4)).toBe("amber");
+    expect(pickQuotaSignal(0.69)).toBe("amber");
     expect(pickQuotaSignal(0.7)).toBe("coral");
     expect(pickQuotaSignal(0.92)).toBe("coral");
   });
@@ -85,5 +85,13 @@ describe("minRemaining / windowOfKind / sortByRemainingDesc", () => {
   it("잔여 많은 순 정렬, 창 없는 row 는 마지막", () => {
     const sorted = sortByRemainingDesc(rows, (r) => r.windows, "weekly_scoped");
     expect(sorted.map((r) => r.name)).toEqual(["b", "a", "c"]);
+  });
+  it("모델별 창이 여러 개면 잔여가 가장 적은 창을 정렬 기준으로 사용", () => {
+    const modelRows = [
+      { name: "a", windows: [w("weekly_scoped", 10, "Spark"), w("weekly_scoped", 90, "Other")] },
+      { name: "b", windows: [w("weekly_scoped", 60, "Spark")] },
+    ];
+    const sorted = sortByRemainingDesc(modelRows, (row) => row.windows, "weekly_scoped");
+    expect(sorted.map((row) => row.name)).toEqual(["b", "a"]);
   });
 });
