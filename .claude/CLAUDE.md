@@ -98,9 +98,6 @@ madup_token_monitoring/
 # 2) 의존성
 pnpm install --dangerously-allow-all-builds
 
-# 2.5) 시크릿 커밋 방지 훅 (public repo — docs/GITLEAKS.md)
-brew install gitleaks && ./scripts/setup-gitleaks.sh
-
 # 3) .env (gitignored). docs/SUPABASE_SETUP.md 와 GITHUB_SECRETS.md 를 보고 동일한 값 채움
 cat > .env <<EOF
 VITE_SUPABASE_URL=https://<project-ref>.supabase.co
@@ -237,17 +234,19 @@ bash scripts/release.sh
 - GPT-5.6 Codex 모델(`gpt-5.6-sol/terra/luna`) 단가는 `src-tauri/pricing.json`에 공식 가격 기준으로
   등록한다. 새 모델 추가 시 `pricing.rs` 회귀 테스트도 함께 갱신한다.
 
-### 6.11 gitleaks allowlist 는 최소 범위로 (public repo)
-- 이 repo 는 public 이라 시크릿 커밋 방지를 로컬 pre-commit(`.githooks/pre-commit`) + CI
-  (`.github/workflows/gitleaks.yml`) 두 겹으로 건다. 설정은 `.gitleaks.toml`, 가이드는
-  `docs/GITLEAKS.md`.
-- **오탐이 나도 `.env` 같은 경로 전체를 allowlist 하지 말 것.** 미래의 실제 시크릿
-  (`sb_secret_...`, Slack secret, AWS 키)까지 삼킨다. 한 줄만 `# gitleaks:allow`, 또는
-  패턴 단위로만 예외 처리한다.
-- 현재 allowlist 는 `sb_publishable_...`(클라이언트 공개용 anon key, RLS 보호) + `.env.example`
-  뿐. 과거 `8b0f664` 의 `.env` 는 이 publishable key 라 실제 유출 아님(로테이션 불필요).
+### 6.11 시크릿 커밋 방지 = GitHub 전용 (public repo, 로컬 강제 없음)
+- 두 겹 모두 GitHub 쪽에서 돈다 (개발자 로컬 설정 불필요). 가이드는 `docs/GITLEAKS.md`.
+  1. **Push Protection (예방)** — 네이티브 secret scanning + push protection. push 순간
+     서버가 시크릿 포함 push 를 거부. `security_and_analysis.secret_scanning*` 로 상태 확인.
+  2. **gitleaks CI (백스톱)** — `.github/workflows/gitleaks.yml` 가 push/PR 마다 전체 히스토리
+     스캔. 제네릭 패턴·과거 커밋을 보완. 설정은 `.gitleaks.toml`.
+- ⚠️ gitleaks CI 는 push **이후** 사후 탐지라 노출을 막지는 못한다 — 예방은 Push Protection 담당.
 - CI 는 조직(madup-dct) 유료 라이선스가 필요한 공식 gitleaks-action 대신 CLI 바이너리를 직접
   실행한다(버전 핀: `gitleaks.yml` 의 `GITLEAKS_VERSION`).
+- **`.gitleaks.toml` allowlist 는 최소 범위로.** `.env` 같은 경로 전체를 allowlist 하면 미래의
+  실제 시크릿(`sb_secret_...`, Slack secret, AWS 키)까지 삼킨다. 오탐은 한 줄 `# gitleaks:allow`
+  또는 패턴 단위로만. 현재 예외는 `sb_publishable_...`(클라이언트 공개용 anon key, RLS 보호) +
+  `.env.example` 뿐. 과거 `8b0f664` 의 `.env` 는 이 publishable key 라 실제 유출 아님(로테이션 불필요).
 
 ## 7. 데이터 흐름 (요약)
 

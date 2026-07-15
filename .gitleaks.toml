@@ -1,8 +1,8 @@
 # gitleaks 설정 — madup-token-monitor
 #
 # 이 repo 는 자동 업데이트 / Slack OAuth 설정상 당분간 public 을 유지해야 하므로,
-# 실수로 커밋된 시크릿을 로컬 pre-commit 훅(.githooks/pre-commit)과 CI(.github/workflows/gitleaks.yml)
-# 양쪽에서 차단한다.
+# 실수로 커밋된 시크릿을 GitHub Push Protection(예방) + 이 CI(.github/workflows/gitleaks.yml,
+# 사후 백스톱) 로 막는다. 이 파일은 gitleaks CI 의 룰/allowlist 설정이다 (docs/GITLEAKS.md).
 #
 # 오탐 1건만 무시하려면: 해당 줄 끝에  # gitleaks:allow  주석을 붙인다.
 # allowlist 확장이 필요하면 아래 [allowlist] 에 최소 범위로만 추가한다.
