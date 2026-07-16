@@ -98,10 +98,15 @@ fn watch_dirs() -> Vec<PathBuf> {
 }
 
 fn watch_dirs_for(home: &Path, codex_home: &Path) -> Vec<PathBuf> {
+    let default_codex_sessions = home.join(".codex").join("sessions");
+    let account_codex_sessions = codex_home.join("sessions");
     let mut dirs = vec![
         home.join(".claude").join("projects"),
-        codex_home.join("sessions"),
+        default_codex_sessions.clone(),
     ];
+    if account_codex_sessions != default_codex_sessions {
+        dirs.push(account_codex_sessions);
+    }
 
     // OpenCode: macOS uses ~/.local/share, Windows uses %LOCALAPPDATA%
     #[cfg(target_os = "windows")]
@@ -275,37 +280,4 @@ fn extract_session_id(path: &Path) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{detect_source_for, reset_if_truncated, watch_dirs_for, FileState};
-    use std::path::Path;
-
-    #[test]
-    fn configured_codex_home_is_watched_and_classified_as_codex() {
-        // Given: Codex is running from an isolated home with another account token.
-        let home = Path::new("/users/example");
-        let codex_home = Path::new("/runtime/codex-home");
-        let session = codex_home.join("sessions/2026/07/15/rollout.jsonl");
-
-        // When: the watcher resolves its roots and classifies that session.
-        let dirs = watch_dirs_for(home, codex_home);
-        let source = detect_source_for(&session, &codex_home.join("sessions"));
-
-        // Then: usage from the configured Codex home enters the Codex pipeline.
-        assert!(dirs.contains(&codex_home.join("sessions")));
-        assert_eq!(source, "codex");
-    }
-
-    #[test]
-    fn truncated_file_resets_offset_and_parser_state() {
-        let state = FileState {
-            offset: 100,
-            buffer: "partial".to_owned(),
-            parser: crate::parser::ParseState::default(),
-        };
-
-        let reset = reset_if_truncated(10, state);
-
-        assert_eq!(reset.offset, 0);
-        assert!(reset.buffer.is_empty());
-    }
-}
+mod tests;
