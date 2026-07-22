@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, Runtime,
+    AppHandle, Emitter, Manager, Runtime,
 };
 
 pub const TRAY_ID: &str = "main-tray";
@@ -71,6 +71,10 @@ fn show_and_focus<R: Runtime>(app: &AppHandle<R>) {
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
+        // 팝오버 webview 에서는 visibilitychange/focus 가 신뢰성 있게 발화하지 않아
+        // react-query refetchOnWindowFocus 가 동작하지 않는다. 표시 시점을 JS 에
+        // 직접 알려 stale 화면(캐시 물고 있는 숫자)을 즉시 갱신하게 한다.
+        let _ = app.emit("window-shown", ());
     }
 }
 

@@ -65,12 +65,30 @@ impl FileWatcher {
             }
         })?;
 
+        let mut existing_dirs: Vec<PathBuf> = Vec::new();
         for dir in watch_dirs() {
             if dir.exists() {
                 watcher.watch(&dir, RecursiveMode::Recursive)?;
-                // Process existing files on startup
-                process_existing_files(&dir, &state, &app);
+                existing_dirs.push(dir);
             }
+        }
+
+        // 기존 파일 캐치업 파싱은 백그라운드 스레드로 — setup(메인 스레드)에서 동기로
+        // 돌리면 백로그가 큰 재기동(헤비 유저 kill 후 등)에서 수 분간 창이 안 뜬다
+        // (2026-07-22 기동 지연 사고). watch 등록을 먼저 끝냈으므로 스캔 중 유입되는
+        // 이벤트도 놓치지 않고, process_file 은 processing mutex 로 전체 직렬화 +
+        // offset 추적이라 스캔/이벤트 경합에도 중복 파싱이 없다.
+        let state_bg = state.clone();
+        let app_bg = app.clone();
+        let spawned = std::thread::Builder::new()
+            .name("catchup-parse".into())
+            .spawn(move || {
+                for dir in existing_dirs {
+                    process_existing_files(&dir, &state_bg, &app_bg);
+                }
+            });
+        if let Err(e) = spawned {
+            eprintln!("[watcher] catchup thread spawn failed: {e}");
         }
 
         Ok(FileWatcher { _watcher: watcher })

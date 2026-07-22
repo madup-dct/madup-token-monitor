@@ -94,16 +94,14 @@ function AggregateSyncDriver() {
       try {
         const { data: sessionData } = await supabase.auth.getSession();
         const userId = sessionData.session?.user.id;
-        if (!userId) {
-          invalidateMine(); // 비로그인 — 로컬 fallback 쿼리만 갱신
-          return;
-        }
-        await syncAggregatesNow();
-        if (!cancelled) invalidateMine();
+        if (userId) await syncAggregatesNow();
       } catch (e) {
         console.warn("[aggregate-sync] failed:", e);
       } finally {
         syncing = false;
+        // sync 실패/비로그인과 무관하게 항상 invalidate — summary 등 로컬 SQLite
+        // 기반 쿼리가 업로드 실패에 인질로 잡혀 옛 숫자에 고정되는 것을 방지.
+        if (!cancelled) invalidateMine();
       }
     }
 
@@ -124,12 +122,20 @@ function AggregateSyncDriver() {
     interval = setInterval(runOnce, SYNC_INTERVAL_MS);
 
     // Tauri 환경에서만 이벤트 구독 (웹 미리보기엔 watcher 없음).
+    // window-shown: 팝오버 webview 는 visibilitychange 가 발화하지 않아
+    // refetchOnWindowFocus 를 못 쓴다 — 트레이가 열리는 순간 같은 throttle 경로로
+    // sync+invalidate 해 "열었는데 옛 숫자" 상태를 해소한다.
     if ("__TAURI_INTERNALS__" in window) {
       import("@tauri-apps/api/event")
-        .then(({ listen }) => listen("usage-updated", onUsageUpdated))
-        .then((un) => {
-          if (cancelled) un();
-          else unlisten = un;
+        .then(({ listen }) =>
+          Promise.all([
+            listen("usage-updated", onUsageUpdated),
+            listen("window-shown", onUsageUpdated),
+          ])
+        )
+        .then((uns) => {
+          if (cancelled) uns.forEach((un) => un());
+          else unlisten = () => uns.forEach((un) => un());
         })
         .catch((e) => console.warn("[usage-updated] listen failed:", e));
     }

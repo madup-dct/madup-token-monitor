@@ -248,6 +248,28 @@ bash scripts/release.sh
   또는 패턴 단위로만. 현재 예외는 `sb_publishable_...`(클라이언트 공개용 anon key, RLS 보호) +
   `.env.example` 뿐. 과거 `8b0f664` 의 `.env` 는 이 publishable key 라 실제 유출 아님(로테이션 불필요).
 
+### 6.12 팝오버 webview 에선 refetchOnWindowFocus 가 안 먹는다 (stale 화면 사고)
+- 트레이 팝오버는 `w.hide()/show()` 로 여닫아 `visibilitychange`/focus 가 발화하지 않음 →
+  react-query `refetchOnWindowFocus` 무용지물. 본인 사용량 쿼리(summary/timeseries/...)는
+  `AggregateSyncDriver.invalidateMine()` 이 유일한 갱신 경로였는데, sync 실패 시 invalidate 를
+  건너뛰어 "DB 는 실시간인데 화면만 옛 숫자" 상태가 발생 (2026-07-21 정현석·안유니 리포트.
+  "로컬 캐시 초기화" 가 워크어라운드였던 이유 = rq persist 삭제 후 재마운트 fetch).
+- fix: ① `runOnce` 의 `invalidateMine()` 을 `finally` 로 (sync 실패해도 로컬 쿼리 갱신),
+  ② `tray.rs::show_and_focus` 가 `window-shown` emit → JS 가 usage-updated 와 같은
+  throttle 경로로 sync+invalidate. 새 "화면 갱신" 요구는 이 두 경로에 편승할 것 —
+  focus 이벤트 기반 트리거를 다시 도입하지 말 것.
+
+### 6.13 기동 캐치업 파싱은 백그라운드 스레드 (창을 인질 잡지 말 것)
+- `FileWatcher::start` 의 `process_existing_files` 를 setup(메인 스레드)에서 동기로 돌리면
+  백로그가 큰 재기동(헤비 유저 kill 후 등)에서 **수 분간 창/UI 가 안 뜬다** (2026-07-22,
+  "kill 후 2분간 안 켜짐" 사고). v0.9.1 부터 `catchup-parse` 스레드로 분리.
+- 순서 불변식: **watch 등록 → 캐치업 스캔**. 스캔 중 유입 이벤트도 notify 로 잡히고,
+  `process_file` 이 processing mutex 전체 직렬화 + offset 추적이라 중복 파싱 없음.
+  기동 시 무거운 신규 작업(재파싱·마이그레이션 등)은 같은 원칙으로 setup 밖에서.
+- 관련 미제: 같은 날 앱 프로세스가 행(hang, heartbeat 정지 + 좀비로 single-instance 차단)
+  걸린 사고의 근본 원인은 스택 미확보로 미확정. 재발 시 kill 전에
+  `sample <PID> 5 -file ~/Desktop/mtm-sample.txt` 캡처부터.
+
 ## 7. 데이터 흐름 (요약)
 
 ```
@@ -256,7 +278,7 @@ bash scripts/release.sh
 parser.rs → parser/{claude,codex,opencode}.rs → usage_events table (SQLite)
   ↓ get_summary (summary.rs) / get_timeseries / get_heatmap / get_top_* (commands.rs)
 React (useUsage.ts) → Dashboard / MCP / Plugins
-  ↓ (5분 주기 + 사용량 변경 이벤트(60초 throttle) + 수동 sync)
+  ↓ (5분 주기 + 사용량 변경 이벤트·팝오버 표시(window-shown, 60초 throttle 공유) + 수동 sync)
 aggregator.rs → Supabase usage_aggregates / mcp_aggregates / plugin_aggregates
   ↓ Supabase RPC (get_top_users, get_top_mcp, get_top_plugins, get_weekly_top10)
 Leaderboard / Plugins (사내 집계 view)
