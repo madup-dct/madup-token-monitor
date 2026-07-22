@@ -273,7 +273,8 @@ bash scripts/release.sh
 ## 7. 데이터 흐름 (요약)
 
 ```
-~/.claude/projects/**/*.jsonl, ~/.codex/sessions/**/*.jsonl, ~/.gemini/**
+~/.claude/projects/**/*.jsonl, ~/.codex/sessions/**/*.jsonl,
+<resolved Codex account home>/sessions/**/*.jsonl (기본 홈과 다를 때), ~/.gemini/**
   ↓ (watcher.rs: notify crate)
 parser.rs → parser/{claude,codex,opencode}.rs → usage_events table (SQLite)
   ↓ get_summary (summary.rs) / get_timeseries / get_heatmap / get_top_* (commands.rs)
@@ -289,6 +290,9 @@ aggregator.rs::upload_limit_snapshot_if_fresh → Supabase claude_limit_snapshot
   ↓ RPC get_claude_account_limits (+ claude_owner 소유자 매핑)
 AccountLimits 페이지 (/limits — 계정별 잔여/리셋, Fable 잔여순)
 ```
+
+Codex 토큰 사용량은 기본 `~/.codex`와 한도 조회용으로 선택된 계정 홈이 다르면 두 세션 경로를
+모두 집계한다. 계정 한도·계정 식별은 선택된 계정 홈만 사용한다.
 
 `usage_events` 의 `(message_id, request_id)` UNIQUE INDEX 로 dedup.
 `get_today_cost_usd` 는 트레이 메뉴바 옆 텍스트 갱신용.

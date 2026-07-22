@@ -112,10 +112,19 @@ fn notify_change(app: &AppHandle, last_emit: &LastEmit) {
 
 fn watch_dirs() -> Vec<PathBuf> {
     let home = home_dir();
+    watch_dirs_for(&home, crate::codex_limits::codex_home())
+}
+
+fn watch_dirs_for(home: &Path, codex_home: &Path) -> Vec<PathBuf> {
+    let default_codex_sessions = home.join(".codex").join("sessions");
+    let account_codex_sessions = codex_home.join("sessions");
     let mut dirs = vec![
         home.join(".claude").join("projects"),
-        home.join(".codex").join("sessions"),
+        default_codex_sessions.clone(),
     ];
+    if account_codex_sessions != default_codex_sessions {
+        dirs.push(account_codex_sessions);
+    }
 
     // OpenCode: macOS uses ~/.local/share, Windows uses %LOCALAPPDATA%
     #[cfg(target_os = "windows")]
@@ -255,8 +264,14 @@ fn persist(
 }
 
 fn detect_source(path: &Path) -> String {
+    detect_source_for(path, &crate::codex_limits::codex_home().join("sessions"))
+}
+
+fn detect_source_for(path: &Path, codex_sessions: &Path) -> String {
     let s = path.to_string_lossy();
-    if s.contains(".claude") {
+    if path.starts_with(codex_sessions) {
+        "codex".to_owned()
+    } else if s.contains(".claude") {
         "claude".to_owned()
     } else if s.contains(".codex") {
         "codex".to_owned()
@@ -283,20 +298,4 @@ fn extract_session_id(path: &Path) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{reset_if_truncated, FileState};
-
-    #[test]
-    fn truncated_file_resets_offset_and_parser_state() {
-        let state = FileState {
-            offset: 100,
-            buffer: "partial".to_owned(),
-            parser: crate::parser::ParseState::default(),
-        };
-
-        let reset = reset_if_truncated(10, state);
-
-        assert_eq!(reset.offset, 0);
-        assert!(reset.buffer.is_empty());
-    }
-}
+mod tests;

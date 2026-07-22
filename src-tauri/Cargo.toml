@@ -18,6 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 fontdue = "0.9"
@@ -33,4 +34,3 @@ tauri-plugin-single-instance = { version = "2.4.2", features = ["deep-link"] }
 tauri-plugin-updater = { version = "2", features = [] }
 ureq = { version = "2", features = ["json"] }
 uuid = { version = "1", features = ["v4"] }
-

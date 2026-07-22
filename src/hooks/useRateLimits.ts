@@ -1,11 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { buildMockCodexRateLimits } from "@/mocks/usageLimitMock";
 import { supabase } from "@/lib/supabase";
-import type {
-  CodexRateLimitSnapshot,
-  ClaudeAccountLimitRow,
-  LimitWindow,
-} from "@/types/models";
+import type { AccountLimitRow, CodexRateLimitSnapshot, LimitWindow } from "@/types/models";
 
 const IS_MOCK = !("__TAURI_INTERNALS__" in window);
 
@@ -100,23 +96,27 @@ export async function refreshOAuthUsage(): Promise<OAuthUsageWithError> {
   }
 }
 
-function buildMockAccountLimits(): ClaudeAccountLimitRow[] {
+function buildMockAccountLimits(): AccountLimitRow[] {
   const now = Date.now();
   const reset5h = new Date(now + 2 * 3_600_000).toISOString();
   const resetWk = new Date(now + 5 * 86_400_000).toISOString();
   const acct = (
-    uuid: string,
+    provider: AccountLimitRow["provider"],
+    accountId: string,
     email: string,
     name: string | null,
+    planType: string | null,
     u5: number,
     u7: number,
     uf: number,
-    updatedAgoMin: number,
-  ): ClaudeAccountLimitRow => ({
-    account_uuid: uuid,
+    updatedAgoMin: number
+  ): AccountLimitRow => ({
+    provider,
+    account_id: accountId,
     account_email: email,
     owner_email: email,
     owner_name: name,
+    plan_type: planType,
     windows: [
       { kind: "session", scope_model: null, utilization: u5, resets_at: reset5h },
       { kind: "weekly_all", scope_model: null, utilization: u7, resets_at: resetWk },
@@ -126,20 +126,64 @@ function buildMockAccountLimits(): ClaudeAccountLimitRow[] {
     updated_at: new Date(now - updatedAgoMin * 60_000).toISOString(),
   });
   return [
-    acct("00000000-0000-0000-0000-000000000001", "hong@madup.com", "홍길동", 8, 12, 5, 3),
-    acct("00000000-0000-0000-0000-000000000002", "kim@madup.com", "김철수", 59, 37, 48, 7),
-    acct("00000000-0000-0000-0000-000000000003", "lee@madup.com", "이영희", 88, 70, 100, 45),
+    acct(
+      "claude",
+      "00000000-0000-0000-0000-000000000001",
+      "hong@madup.com",
+      "홍길동",
+      null,
+      8,
+      12,
+      5,
+      3
+    ),
+    acct(
+      "claude",
+      "00000000-0000-0000-0000-000000000002",
+      "kim@madup.com",
+      "김철수",
+      null,
+      59,
+      37,
+      48,
+      7
+    ),
+    acct("codex", "acct_codex_01", "lee@madup.com", "이영희", "pro", 28, 34, 11, 4),
   ];
 }
 
-export function useClaudeAccountLimits() {
-  return useQuery<ClaudeAccountLimitRow[]>({
-    queryKey: ["claudeAccountLimits"],
+interface ClaudeAccountLimitRpcRow extends Omit<
+  AccountLimitRow,
+  "provider" | "account_id" | "plan_type"
+> {
+  account_uuid: string;
+}
+
+type CodexAccountLimitRpcRow = Omit<AccountLimitRow, "provider">;
+
+export function useAccountLimits() {
+  return useQuery<AccountLimitRow[]>({
+    queryKey: ["accountLimits"],
     queryFn: async () => {
       if (IS_MOCK) return delay(buildMockAccountLimits());
-      const { data, error } = await supabase.rpc("get_claude_account_limits");
-      if (error) throw new Error(error.message);
-      return (data ?? []) as ClaudeAccountLimitRow[];
+      const [claude, codex] = await Promise.all([
+        supabase.rpc("get_claude_account_limits"),
+        supabase.rpc("get_codex_account_limits"),
+      ]);
+      if (claude.error && codex.error) {
+        throw new Error(`${claude.error.message}; ${codex.error.message}`);
+      }
+      const claudeRows = (claude.error ? [] : (claude.data ?? [])) as ClaudeAccountLimitRpcRow[];
+      const codexRows = (codex.error ? [] : (codex.data ?? [])) as CodexAccountLimitRpcRow[];
+      return [
+        ...claudeRows.map(({ account_uuid, ...row }) => ({
+          ...row,
+          provider: "claude" as const,
+          account_id: account_uuid,
+          plan_type: null,
+        })),
+        ...codexRows.map((row) => ({ ...row, provider: "codex" as const })),
+      ];
     },
     staleTime: 60_000,
     refetchInterval: 5 * 60_000,

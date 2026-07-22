@@ -2,7 +2,7 @@ import { pickQuotaSignal, type QuotaSignal } from "@/components/ui/quotaSignal";
 
 const DOT_BG: Record<QuotaSignal, string> = {
   lime: "var(--color-lime)",
-  orange: "var(--color-orange)",
+  amber: "var(--color-amber)",
   coral: "var(--color-coral)",
 };
 
@@ -15,8 +15,7 @@ export function StatusDot({
   readonly used: number | null;
   readonly size?: number;
 }) {
-  const background =
-    used === null ? "var(--color-surface-3)" : DOT_BG[pickQuotaSignal(used)];
+  const background = used === null ? "var(--color-surface-3)" : DOT_BG[pickQuotaSignal(used)];
   return (
     <span
       aria-hidden="true"

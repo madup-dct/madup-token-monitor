@@ -2,6 +2,9 @@
 // [MODULE MARKER] W2: 파일 워처 + JSONL 파서 + SQLite
 // 아래 주석 아래에 mod watcher; mod parser; mod db; 추가
 // ============================================================
+pub mod codex_account;
+mod codex_home;
+pub mod codex_limit_sync;
 pub mod codex_limits;
 pub mod commands;
 pub mod db;

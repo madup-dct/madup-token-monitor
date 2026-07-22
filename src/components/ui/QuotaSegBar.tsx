@@ -11,24 +11,22 @@ interface QuotaSegBarProps {
 
 const FULL_BG: Record<QuotaSignal, string> = {
   lime: "var(--color-lime)",
-  orange: "var(--color-orange)",
+  amber: "var(--color-amber)",
   coral: "var(--color-coral)",
 };
 
 const DIM_BG: Record<QuotaSignal, string> = {
   lime: "rgba(155,225,93,0.35)",
-  orange: "rgba(255,159,69,0.35)",
+  amber: "rgba(245,181,68,0.35)",
   coral: "rgba(255,107,92,0.35)",
 };
 
 const GLOW: Record<QuotaSignal, string> = {
   lime: "0 0 8px rgba(155,225,93,0.45)",
-  orange: "0 0 8px rgba(255,159,69,0.45)",
+  amber: "0 0 8px rgba(245,181,68,0.45)",
   coral: "0 0 8px rgba(255,107,92,0.45)",
 };
 
-/// 12-세그먼트 quota meter — 사용률만큼 채우고(usage meter), 신호색은 사용률 기준:
-/// 많이 쓸수록 lime→orange→coral. 마지막 부분 채움은 dim 으로.
 export function QuotaSegBar({
   value,
   segments = 12,

@@ -49,16 +49,34 @@ struct RawSnapshot {
 
 #[tauri::command]
 pub fn get_codex_rate_limits() -> Result<Vec<CodexRateLimitSnapshot>, String> {
-    let root = codex_home().join("sessions");
-    if !root.exists() {
+    let home = codex_home();
+    let Some(account) = crate::codex_account::read_codex_account_from(home) else {
         return Ok(Vec::new());
-    }
-    Ok(read_codex_rate_limits(&root))
+    };
+    Ok(read_current_codex_rate_limits_from(
+        home,
+        account.auth_started_at_ms,
+    ))
 }
 
+#[cfg(test)]
 fn read_codex_rate_limits(root: &Path) -> Vec<CodexRateLimitSnapshot> {
+    read_codex_rate_limits_since(root, None, None)
+}
+
+fn read_codex_rate_limits_since(
+    root: &Path,
+    created_since_ms: Option<i64>,
+    modified_since_ms: Option<i64>,
+) -> Vec<CodexRateLimitSnapshot> {
     let mut files = Vec::new();
     collect_jsonl(root, &mut files);
+    if let Some(cutoff) = created_since_ms {
+        files.retain(|path| file_created_at_ms(path).is_some_and(|created| created >= cutoff));
+    }
+    if let Some(cutoff) = modified_since_ms {
+        files.retain(|path| file_modified_at_ms(path).is_some_and(|modified| modified >= cutoff));
+    }
     files.sort_by_key(|path| {
         (
             fs::metadata(path)
@@ -80,11 +98,42 @@ fn read_codex_rate_limits(root: &Path) -> Vec<CodexRateLimitSnapshot> {
     select_latest_snapshots(snapshots)
 }
 
-fn codex_home() -> PathBuf {
-    std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))
-        .unwrap_or_else(|| PathBuf::from(".codex"))
+fn file_created_at_ms(path: &Path) -> Option<i64> {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.created())
+        .ok()
+        .and_then(|created| created.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+}
+
+fn file_modified_at_ms(path: &Path) -> Option<i64> {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+}
+
+pub(crate) use crate::codex_home::codex_home;
+
+fn read_current_codex_rate_limits_from(
+    home: &Path,
+    auth_started_at_ms: i64,
+) -> Vec<CodexRateLimitSnapshot> {
+    read_account_codex_rate_limits_from(home, auth_started_at_ms, auth_started_at_ms)
+}
+
+pub(crate) fn read_account_codex_rate_limits_from(
+    home: &Path,
+    created_since_ms: i64,
+    modified_since_ms: i64,
+) -> Vec<CodexRateLimitSnapshot> {
+    let root = home.join("sessions");
+    if root.exists() {
+        read_codex_rate_limits_since(&root, Some(created_since_ms), Some(modified_since_ms))
+    } else {
+        Vec::new()
+    }
 }
 
 fn collect_jsonl(dir: &Path, output: &mut Vec<PathBuf>) {
@@ -175,114 +224,5 @@ fn select_latest_snapshots(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{parse_snapshot, read_codex_rate_limits, select_latest_snapshots};
-    use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    const STANDARD: &str = r#"{"timestamp":"2026-07-12T23:30:15.214Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","limit_name":null,"primary":{"used_percent":100.0,"window_minutes":300,"resets_at":1783865360},"secondary":{"used_percent":21.0,"window_minutes":10080,"resets_at":1784452160},"plan_type":"pro"}}}"#;
-    const SPARK: &str = r#"{"timestamp":"2026-07-13T00:46:47.346Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex_bengalfox","limit_name":"GPT-5.3-Codex-Spark","primary":{"used_percent":4.0,"window_minutes":10080,"resets_at":1784504577},"secondary":null,"plan_type":"pro"}}}"#;
-
-    #[test]
-    fn test_parse_snapshot_reads_standard_and_model_limits() {
-        let standard = parse_snapshot(STANDARD).expect("standard snapshot");
-        let spark = parse_snapshot(SPARK).expect("model snapshot");
-
-        assert_eq!(standard.limit_id, "codex");
-        assert_eq!(
-            standard.primary.as_ref().map(|window| window.used_percent),
-            Some(100.0)
-        );
-        assert_eq!(
-            standard
-                .secondary
-                .as_ref()
-                .map(|window| window.used_percent),
-            Some(21.0)
-        );
-        assert_eq!(spark.limit_name.as_deref(), Some("GPT-5.3-Codex-Spark"));
-        assert_eq!(spark.secondary, None);
-    }
-
-    #[test]
-    fn test_select_latest_snapshots_keeps_newest_per_limit_id() {
-        let older = STANDARD.replace("2026-07-12T23:30:15.214Z", "2026-07-11T23:30:15.214Z");
-        let older = older.replace("100.0", "80.0");
-        let snapshots = [
-            parse_snapshot(&older).expect("older snapshot"),
-            parse_snapshot(STANDARD).expect("newer snapshot"),
-            parse_snapshot(SPARK).expect("model snapshot"),
-        ];
-
-        let selected = select_latest_snapshots(snapshots);
-
-        assert_eq!(selected.len(), 2);
-        assert_eq!(selected[0].limit_id, "codex");
-        assert_eq!(
-            selected[0]
-                .primary
-                .as_ref()
-                .map(|window| window.used_percent),
-            Some(100.0)
-        );
-    }
-
-    #[test]
-    fn test_select_latest_snapshots_prefers_later_equal_timestamp_record() {
-        let corrected = STANDARD.replace("100.0", "75.0");
-        let selected = select_latest_snapshots([
-            parse_snapshot(STANDARD).expect("initial snapshot"),
-            parse_snapshot(&corrected).expect("corrected snapshot"),
-        ]);
-
-        assert_eq!(
-            selected[0]
-                .primary
-                .as_ref()
-                .map(|window| window.used_percent),
-            Some(75.0)
-        );
-    }
-
-    #[test]
-    fn test_file_scan_keeps_rare_limit_beyond_512_files_and_later_equal_timestamp() {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock after epoch")
-            .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("codex-limits-{}-{nonce}", std::process::id()));
-        fs::create_dir_all(&root).expect("create fixture directory");
-
-        let rare = STANDARD.replace("\"codex\"", "\"rare-model\"");
-        fs::write(root.join("000.jsonl"), rare).expect("write rare limit");
-        for index in 1..=512 {
-            let percent = if index == 512 { "60.0" } else { "59.0" };
-            let snapshot = STANDARD.replace("100.0", percent);
-            fs::write(root.join(format!("{index:03}.jsonl")), snapshot)
-                .expect("write standard limit");
-        }
-
-        let selected = read_codex_rate_limits(&root);
-        fs::remove_dir_all(&root).expect("remove fixture directory");
-
-        assert!(selected
-            .iter()
-            .any(|snapshot| snapshot.limit_id == "rare-model"));
-        let standard = selected
-            .iter()
-            .find(|snapshot| snapshot.limit_id == "codex")
-            .expect("standard limit");
-        assert_eq!(
-            standard.primary.as_ref().map(|window| window.used_percent),
-            Some(60.0)
-        );
-    }
-
-    #[test]
-    fn test_parse_snapshot_rejects_invalid_percent() {
-        let invalid = STANDARD.replace("100.0", "101.0");
-
-        assert!(parse_snapshot(&invalid).is_none());
-    }
-}
+#[path = "codex_limits_tests.rs"]
+mod tests;

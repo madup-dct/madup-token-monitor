@@ -136,7 +136,9 @@ pub fn refresh_tray_title<R: Runtime>(app: &AppHandle<R>) {
     let cost = crate::commands::today_cost_usd() + crate::aggregator::cached_other_devices_cost();
     let show_text = crate::commands::read_show_menubar_cost();
     let show_limits = crate::commands::read_show_menubar_limits();
-    let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return;
+    };
 
     #[cfg(target_os = "macos")]
     {
@@ -147,8 +149,7 @@ pub fn refresh_tray_title<R: Runtime>(app: &AppHandle<R>) {
         } else {
             Vec::new()
         };
-        let cost_text =
-            (show_text && cost >= 0.5).then(|| format!("${}", cost.round() as i64));
+        let cost_text = (show_text && cost >= 0.5).then(|| format!("${}", cost.round() as i64));
 
         if !items.is_empty() {
             let dark = is_dark_menubar();
@@ -167,7 +168,9 @@ pub fn refresh_tray_title<R: Runtime>(app: &AppHandle<R>) {
                 return;
             }
             let logo = tauri::image::Image::from_bytes(TRAY_ICON_BYTES).ok();
-            let logo_ref = logo.as_ref().map(|img| (img.rgba(), img.width(), img.height()));
+            let logo_ref = logo
+                .as_ref()
+                .map(|img| (img.rgba(), img.width(), img.height()));
             if let Some((buf, w, h)) = crate::tray_render::render_status_strip(
                 logo_ref,
                 cost_text.as_deref(),
@@ -185,7 +188,10 @@ pub fn refresh_tray_title<R: Runtime>(app: &AppHandle<R>) {
         }
 
         // 한도 off / 캐시 없음 / 렌더 실패 — 기본 로고 + 기존 타이틀 방식.
-        let was_custom = LAST_RENDER_KEY.lock().map(|g| !g.is_empty()).unwrap_or(false);
+        let was_custom = LAST_RENDER_KEY
+            .lock()
+            .map(|g| !g.is_empty())
+            .unwrap_or(false);
         if was_custom {
             if let Ok(icon) = tauri::image::Image::from_bytes(TRAY_ICON_BYTES) {
                 let _ = tray.set_icon(Some(icon));
@@ -242,6 +248,7 @@ pub fn spawn_title_updater<R: Runtime>(app: AppHandle<R>) {
         // 항상 캐시를 데운다 (스펙 §2). 업로드 함수는 이 캐시를 재사용한다.
         let _ = crate::oauth_usage::get_usage_blocking();
         crate::aggregator::upload_limit_snapshot_if_fresh();
+        crate::codex_limit_sync::upload_if_fresh();
         #[cfg(target_os = "macos")]
         refresh_dark_menubar_cache();
         refresh_tray_title(&app);
