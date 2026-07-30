@@ -1,6 +1,6 @@
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rusqlite::Connection;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -31,6 +31,11 @@ struct WatchState {
 /// usage-updated emit 최소 간격 — 활발한 CLI 사용 시 초당 수십 modify 이벤트가 와도
 /// 프론트 invalidate/sync 를 이 간격 이하로 제한한다.
 const EMIT_THROTTLE: Duration = Duration::from_millis(1500);
+
+/// 안전망 주기 재스캔 간격 — 장기 무재시작 실행에서 라이브 notify 가 놓친 파일과
+/// 기동 뒤 생긴 계정 홈(orca 등)을 이 주기로 흡수한다. sleep-first 라 첫 재스캔은
+/// T+RESCAN_INTERVAL (startup catch-up 과 중복 스캔 없음).
+const RESCAN_INTERVAL: Duration = Duration::from_secs(300);
 
 pub struct FileWatcher {
     _watcher: RecommendedWatcher,
@@ -91,6 +96,32 @@ impl FileWatcher {
             eprintln!("[watcher] catchup thread spawn failed: {e}");
         }
 
+        // 주기 안전망 재스캔 — startup 고정 트리거(watch 등록·catch-up 1회·codex_home
+        // OnceLock)가 장기 무재시작 실행에서 드리프트하는 것을 덮는다. 매 주기 계정 홈을
+        // fresh 재해석해 기동 뒤 생긴 홈(orca 등)까지 흡수하고, WatchState(offset 맵)를
+        // 라이브 watcher 와 공유하므로 이미 파싱한 파일은 file_len==offset 조기반환(재파싱 0).
+        // 이 스레드가 조용히 죽으면 orca 는 유일 수집 경로를 잃으므로(동적 re-watch 없음)
+        // 사이클을 catch_unwind 로 감싸 한 사이클 패닉에 루프를 지킨다.
+        let state_rescan = state.clone();
+        let app_rescan = app.clone();
+        let spawned_rescan = std::thread::Builder::new()
+            .name("rescan-parse".into())
+            .spawn(move || {
+                let mut seen_dirs: HashSet<PathBuf> = HashSet::new();
+                loop {
+                    std::thread::sleep(RESCAN_INTERVAL);
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        rescan_once(&state_rescan, &app_rescan, &mut seen_dirs);
+                    }));
+                    if outcome.is_err() {
+                        eprintln!("[watcher] rescan cycle panicked; loop continues");
+                    }
+                }
+            });
+        if let Err(e) = spawned_rescan {
+            eprintln!("[watcher] rescan thread spawn failed: {e}");
+        }
+
         Ok(FileWatcher { _watcher: watcher })
     }
 }
@@ -99,7 +130,9 @@ impl FileWatcher {
 /// EMIT_THROTTLE 이내 중복 호출은 무시해 invalidate/sync 폭주를 막는다.
 fn notify_change(app: &AppHandle, last_emit: &LastEmit) {
     {
-        let mut last = last_emit.lock().unwrap();
+        // poison-tolerant — 어느 한 스레드의 패닉이 라이브 watcher/재스캔을 cascade 로
+        // 죽이지 않도록 into_inner 로 복구한다(가드 데이터는 Instant/오프셋 맵이라 안전).
+        let mut last = last_emit.lock().unwrap_or_else(|e| e.into_inner());
         if last.elapsed() < EMIT_THROTTLE {
             return;
         }
@@ -154,6 +187,24 @@ fn process_existing_files(dir: &Path, state: &WatchState, app: &AppHandle) {
     }
 }
 
+/// 안전망 재스캔 1회 — 계정 홈을 fresh 재해석(`resolve_current_codex_home`)해 현재
+/// watch 대상을 다시 걸고 신규/증분 파일을 파싱한다. `codex_home()` OnceLock 은 계정
+/// 한도 전용이라 여기서 건드리지 않는다. 처음 보는 홈은 진단용으로 1회만 로그한다
+/// (`seen_dirs` 는 rescan 스레드-로컬 누적).
+fn rescan_once(state: &WatchState, app: &AppHandle, seen_dirs: &mut HashSet<PathBuf>) {
+    let home = home_dir();
+    let codex_home = crate::codex_home::resolve_current_codex_home();
+    for dir in watch_dirs_for(&home, &codex_home) {
+        if !dir.exists() {
+            continue;
+        }
+        if seen_dirs.insert(dir.clone()) {
+            eprintln!("[watcher] rescan tracking dir: {}", dir.display());
+        }
+        process_existing_files(&dir, state, app);
+    }
+}
+
 fn walkdir_jsonl(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut results = Vec::new();
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -172,7 +223,9 @@ fn walkdir_jsonl(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
 }
 
 fn process_file(path: &Path, state: &WatchState, app: &AppHandle) {
-    let _processing = state.processing.lock().unwrap();
+    // poison-tolerant 락 — 아래 참여 스레드(라이브 notify·catch-up·재스캔) 중 하나가
+    // 패닉해 뮤텍스가 poison 되어도 나머지가 계속 수집하도록 into_inner 로 복구한다.
+    let _processing = state.processing.lock().unwrap_or_else(|e| e.into_inner());
     let Ok(mut file) = fs::File::open(path) else {
         return;
     };
@@ -181,7 +234,7 @@ fn process_file(path: &Path, state: &WatchState, app: &AppHandle) {
     };
 
     let mut file_state = {
-        let map = state.files.lock().unwrap();
+        let map = state.files.lock().unwrap_or_else(|e| e.into_inner());
         map.get(path).cloned().unwrap_or_default()
     };
 
@@ -236,7 +289,7 @@ fn process_file(path: &Path, state: &WatchState, app: &AppHandle) {
     // Update state
     file_state.offset += new_bytes.len() as u64;
     file_state.buffer = leftover;
-    let mut files = state.files.lock().unwrap();
+    let mut files = state.files.lock().unwrap_or_else(|e| e.into_inner());
     files.insert(path.to_path_buf(), file_state);
 }
 
@@ -273,7 +326,12 @@ fn detect_source_for(path: &Path, codex_sessions: &Path) -> String {
         "codex".to_owned()
     } else if s.contains(".claude") {
         "claude".to_owned()
-    } else if s.contains(".codex") {
+    } else if s.contains(".codex") || s.contains("codex-runtime-home") {
+        // `codex-runtime-home` = orca 관리 Codex 런타임 홈. 이 리터럴은
+        // codex_home.rs 의 `orca/codex-runtime-home/home` 경로와 동기 유지할 것.
+        // orca 경로는 `.codex` 문자열을 안 포함하므로, OnceLock 이 기본 홈을
+        // 가리킬 때(orca 홈이 기동 후 생성된 경우) starts_with 브랜치를 못 타
+        // "unknown" 으로 드롭된다 — 여기서 codex 로 잡아 재스캔 수집을 보장한다.
         "codex".to_owned()
     } else if s.contains("opencode") {
         "opencode".to_owned()
