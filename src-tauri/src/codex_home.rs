@@ -13,7 +13,11 @@ pub(crate) fn codex_home() -> &'static Path {
     CODEX_HOME.get_or_init(resolve_current_codex_home).as_path()
 }
 
-fn resolve_current_codex_home() -> PathBuf {
+/// 계정 한도용 `codex_home()`(OnceLock) 과 달리 **캐시 없이 매번 fresh 해석**한다.
+/// watcher 의 주기 재스캔이 기동 뒤 생긴 계정 홈(orca 등)을 흡수하려면 매 주기 재해석이
+/// 필요하므로 pub(crate) 로 노출한다. 계정 식별/한도 경로는 여전히 OnceLock 을 써서
+/// mid-run 계정 identity flip 을 막는다.
+pub(crate) fn resolve_current_codex_home() -> PathBuf {
     let explicit = std::env::var_os("CODEX_HOME").map(PathBuf::from);
     let default = dirs::home_dir()
         .map(|home| home.join(".codex"))
