@@ -36,7 +36,9 @@ export default function UserDashboard() {
   );
   const [granularity, setGranularity] = usePersistentState<UserUsageGranularity>(
     "madup-token-monitor:view:user:granularity",
-    "daily"
+    "daily",
+    // 월별 옵션 제거 전 저장된 값("monthly")이 남아있으면 기본값으로 되돌린다.
+    (v): v is UserUsageGranularity => v === "hourly" || v === "daily" || v === "weekly"
   );
   const [dailyRange, setDailyRange] = usePersistentState<UserUsageDailyRange>(
     "madup-token-monitor:view:user:dailyRange",
