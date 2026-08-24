@@ -3,7 +3,7 @@ import type { UserDailyAggregate, UserHourlyAggregate } from "@/lib/user-dashboa
 import { matchesUsageScope, type UsageScope } from "@/lib/usage-sources";
 import { pctDiff, priorDaysAverage } from "@/lib/usage-math";
 
-export type UserUsageGranularity = "hourly" | "daily" | "weekly" | "monthly";
+export type UserUsageGranularity = "hourly" | "daily" | "weekly";
 export type UserUsageDailyRange = 7 | 30 | 90;
 
 export interface UserDashboardUsageInput {
@@ -134,16 +134,6 @@ function weeklyKeys(nowMs: number, count: number): string[] {
   );
 }
 
-function monthlyKeys(nowMs: number, count: number): string[] {
-  const shiftedNow = new Date(nowMs + KST_OFFSET_MS);
-  return Array.from({ length: count }, (_, index) => {
-    const date = new Date(
-      Date.UTC(shiftedNow.getUTCFullYear(), shiftedNow.getUTCMonth() + index - count + 1, 1)
-    );
-    return `${date.getUTCFullYear()}-${padded(date.getUTCMonth() + 1)}`;
-  });
-}
-
 function summarizeRange(
   rows: readonly UserDailyAggregate[],
   start: string,
@@ -180,13 +170,6 @@ function buildPeriodRows(
       rows: fillRows(weeklyKeys(nowMs, 12), aggregateDaily(daily, weekStartKey)),
       labelFormat: (row) => `${Number(row.date.slice(5, 7))}/${Number(row.date.slice(8, 10))}~`,
       periodLabel: "최근 12주 · 주별",
-    };
-  }
-  if (granularity === "monthly") {
-    return {
-      rows: fillRows(monthlyKeys(nowMs, 12), aggregateDaily(daily, monthKey)),
-      labelFormat: (row) => `${row.date.slice(2, 4)}년 ${Number(row.date.slice(5, 7))}월`,
-      periodLabel: "최근 12개월 · 월별",
     };
   }
   return {

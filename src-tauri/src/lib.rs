@@ -12,6 +12,7 @@ pub mod models;
 pub mod parser;
 pub mod plugins;
 pub mod pricing;
+pub mod retention;
 pub mod summary;
 pub mod watcher;
 
@@ -132,6 +133,10 @@ pub fn run() {
                 Ok(w) => std::mem::forget(w),
                 Err(e) => eprintln!("file watcher start failed: {e}"),
             }
+
+            // 보존기간 정리 — "이번 달 + 직전 2개월" 밖 로컬 데이터를 주기적으로 삭제.
+            // watcher 등록 뒤에 둔다: 순서가 바뀌어도 결과는 같지만 수집이 항상 우선.
+            retention::spawn_purge_loop();
 
             // 사내 전용 앱 — 로그인 시 항상 자동 실행 (사용자 선택 없음). 매 실행마다 보장.
             {

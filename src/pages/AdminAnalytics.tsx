@@ -32,12 +32,11 @@ function defaultRange(): DateRange {
 
 type EntityModal = { kind: "mcp" | "plugin"; entity: string; label: string };
 
-type Gran = "hourly" | "daily" | "weekly" | "monthly";
+type Gran = "hourly" | "daily" | "weekly";
 const GRAN_OPTIONS = [
   { value: "hourly", label: "시간별" },
   { value: "daily", label: "일자별" },
   { value: "weekly", label: "주별" },
-  { value: "monthly", label: "월별" },
 ];
 
 function localDateKey(ts: number): string {
@@ -51,10 +50,6 @@ function weekStartKey(ts: number): string {
   d.setHours(0, 0, 0, 0);
   return localDateKey(d.getTime());
 }
-function monthKey(ts: number): string {
-  const d = new Date(ts);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
 function localHourKey(ts: number): string {
   const d = new Date(ts);
   return `${localDateKey(ts)} ${String(d.getHours()).padStart(2, "0")}:00`;
@@ -62,10 +57,6 @@ function localHourKey(ts: number): string {
 function weekLabel(weekStart: string): string {
   const d = new Date(weekStart + "T00:00:00");
   return `${d.getMonth() + 1}/${d.getDate()}~`;
-}
-function monthLabel(mk: string): string {
-  const [y, m] = mk.split("-");
-  return `${y!.slice(2)}년 ${parseInt(m!, 10)}월`;
 }
 
 interface SeriesOut {
@@ -94,7 +85,7 @@ function buildUsageChart(
     for (let i = 23; i >= 0; i--) orderedKeys.push(localHourKey(base.getTime() - i * 3600_000));
     labelOf = (k) => `${k.slice(11, 13)}시`;
   } else {
-    const keyFn = gran === "weekly" ? weekStartKey : gran === "monthly" ? monthKey : localDateKey;
+    const keyFn = gran === "weekly" ? weekStartKey : localDateKey;
     entries = dailyRows.map((r) => ({
       user: r.user_id,
       key: keyFn(new Date(r.date + "T00:00:00").getTime()),
@@ -109,7 +100,7 @@ function buildUsageChart(
         orderedKeys.push(localDateKey(d.getTime()));
       }
       labelOf = (k) => k.slice(5);
-    } else if (gran === "weekly") {
+    } else {
       const ws = weekStartKey(new Date().getTime());
       for (let i = 11; i >= 0; i--) {
         const d = new Date(ws + "T00:00:00");
@@ -117,13 +108,6 @@ function buildUsageChart(
         orderedKeys.push(localDateKey(d.getTime()));
       }
       labelOf = (k) => weekLabel(k);
-    } else {
-      const t = new Date();
-      for (let i = 11; i >= 0; i--) {
-        const d = new Date(t.getFullYear(), t.getMonth() - i, 1);
-        orderedKeys.push(monthKey(d.getTime()));
-      }
-      labelOf = (k) => monthLabel(k);
     }
   }
 
@@ -174,6 +158,8 @@ export default function AdminAnalytics() {
   const [gran, setGran] = usePersistentState<Gran>(
     "madup-token-monitor:view:admin:gran",
     "daily",
+    // 월별 옵션 제거 전 저장된 값("monthly")이 남아있으면 기본값으로 되돌린다.
+    (v): v is Gran => v === "hourly" || v === "daily" || v === "weekly",
   );
   const [modal, setModal] = useState<EntityModal | null>(null);
 

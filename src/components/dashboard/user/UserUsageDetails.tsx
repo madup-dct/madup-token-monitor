@@ -67,7 +67,6 @@ export function UserUsageDetails({
                 { value: "hourly", label: "시간별" },
                 { value: "daily", label: "일자별" },
                 { value: "weekly", label: "주별" },
-                { value: "monthly", label: "월별" },
               ]}
               ariaLabel="단위 선택"
             />

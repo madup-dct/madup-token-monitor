@@ -70,6 +70,7 @@ madup_token_monitoring/
 │       ├── watcher.rs      # 파일 워처 (tokio + notify)
 │       ├── aggregator.rs   # Supabase 집계 업로드 (sync_aggregates_now)
 │       ├── pricing.rs      # 모델별 단가 테이블
+│       ├── retention.rs    # 보존기간 2개월 컷오프 + 주기 purge (백그라운드 스레드)
 │       ├── plugins.rs      # 플러그인 사용 집계
 │       ├── oauth_usage.rs  # Anthropic 비공개 endpoint (limits 배열 → windows 일반화, 계정 식별)
 │       └── tray_render.rs  # 트레이 한도 상태 스트립 RGBA 렌더 (fontdue)
@@ -270,6 +271,21 @@ bash scripts/release.sh
   걸린 사고의 근본 원인은 스택 미확보로 미확정. 재발 시 kill 전에
   `sample <PID> 5 -file ~/Desktop/mtm-sample.txt` 캡처부터.
 
+### 6.14 보존기간 2개월 — 삭제만으로는 안 된다 (재파싱 재유입)
+- 정책: **"이번 달 + 직전 2개 달력 월"** 만 보관. 컷오프 = (이번 달 1일) − 2개월
+  (8월 → 6/1 미만 삭제). 로컬 `retention.rs::cutoff_date` 와 Supabase
+  `retention_cutoff_date()`(0027) 가 같은 정의 — 한쪽만 고치지 말 것.
+- **watcher 의 파일 offset 은 메모리 전용**이라 재기동마다 JSONL 을 전량 재파싱한다.
+  purge 만 넣으면 지운 옛 데이터가 매 기동마다 되살아나고 Supabase 재업로드까지 유발 →
+  `watcher::persist_since` 가 삽입 시점에도 같은 컷오프로 거른다. **두 경로는 항상 같이 간다.**
+- purge 는 `retention-purge` 백그라운드 스레드에서 기동 1회 + 6시간 주기 (§6.13 — setup
+  메인 스레드에서 대량 삭제·VACUUM 금지). 주기 실행이라 월 경계도 재기동 없이 넘어간다.
+- 워터마크: 오래된 row 만 지우면 MAX(id) 가 그대로라 손댈 필요 없다. **테이블이 완전히
+  비었을 때만** `sync_state` 워터마크를 지운다 (rowid 재사용 → 신규 이벤트 영구 누락, §7).
+- 원격 정리는 `purge_old_usage()`(pg_cron 매일 00:10 KST). 사용량 버킷 5개 테이블만 —
+  `messages`·limit 스냅샷·마스터 데이터는 대상 아님. 실행 전 규모는
+  `retention_purge_preview()` 로 확인. **되돌릴 수 없다.**
+
 ## 7. 데이터 흐름 (요약)
 
 ```
@@ -293,6 +309,9 @@ AccountLimits 페이지 (/limits — 계정별 잔여/리셋, Fable 잔여순)
 
 Codex 토큰 사용량은 기본 `~/.codex`와 한도 조회용으로 선택된 계정 홈이 다르면 두 세션 경로를
 모두 집계한다. 계정 한도·계정 식별은 선택된 계정 홈만 사용한다.
+
+로컬·원격 모두 **보존기간 2개월**(이번 달 + 직전 2개 달력 월). 로컬은 `retention.rs` 의
+백그라운드 purge, 원격은 `purge_old_usage()`(pg_cron). 상세는 §6.14.
 
 `usage_events` 의 `(message_id, request_id)` UNIQUE INDEX 로 dedup.
 `get_today_cost_usd` 는 트레이 메뉴바 옆 텍스트 갱신용.

@@ -307,10 +307,28 @@ fn persist(
     events: &[crate::models::UsageEvent],
     calls: &[crate::models::ToolCall],
 ) -> rusqlite::Result<()> {
+    persist_since(conn, events, calls, crate::retention::cutoff_ms())
+}
+
+/// 보존 컷오프 이전 이벤트는 아예 저장하지 않는다.
+/// 파일 offset 이 메모리 전용이라 재기동마다 JSONL 을 전량 재파싱하는데, 이 필터가 없으면
+/// retention 이 지운 옛 데이터가 매 기동마다 되살아나고 Supabase 재업로드까지 유발한다.
+fn persist_since(
+    conn: &Connection,
+    events: &[crate::models::UsageEvent],
+    calls: &[crate::models::ToolCall],
+    cutoff_ms: i64,
+) -> rusqlite::Result<()> {
     for e in events {
+        if e.ts < cutoff_ms {
+            continue;
+        }
         db::insert_usage_event(conn, e)?;
     }
     for c in calls {
+        if c.ts < cutoff_ms {
+            continue;
+        }
         db::insert_tool_call(conn, c)?;
     }
     Ok(())

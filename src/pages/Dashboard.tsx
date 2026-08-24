@@ -42,12 +42,11 @@ const RANGES: { value: Range; label: string }[] = [
   { value: "90d", label: "dashboard.period.quarter" },
 ];
 
-type Granularity = "hourly" | "daily" | "weekly" | "monthly";
+type Granularity = "hourly" | "daily" | "weekly";
 const GRANULARITIES: { value: Granularity; label: string }[] = [
   { value: "hourly", label: "시간별" },
   { value: "daily", label: "일자별" },
   { value: "weekly", label: "주별" },
-  { value: "monthly", label: "월별" },
 ];
 
 // 모델별 토큰 카드 캐러셀 면 — 로컬 get_summary 의 range 의미 그대로 (1d=오늘 자정부터).
@@ -99,9 +98,6 @@ function monthKey(ts: number): string {
   const d = new Date(ts);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
-function yearKey(ts: number): string {
-  return String(new Date(ts).getFullYear());
-}
 function weekLabel(weekStartDate: string): string {
   const d = new Date(weekStartDate + "T00:00:00");
   const month = d.getMonth() + 1;
@@ -114,9 +110,6 @@ function weekLabel(weekStartDate: string): string {
 function monthLabel(mk: string): string {
   const [y, m] = mk.split("-");
   return `${y.slice(2)}년 ${parseInt(m, 10)}월`;
-}
-function yearLabel(year: string): string {
-  return `${year.slice(2)}년`;
 }
 
 interface AggRow {
@@ -131,9 +124,7 @@ function aggregateByPeriod(points: Point[], granularity: Granularity): AggRow[] 
       ? hourKey
       : granularity === "weekly"
         ? weekStartKey
-        : granularity === "monthly"
-          ? monthKey
-          : localDateKey;
+        : localDateKey;
   const map = new Map<string, { tokens: number; cost: number }>();
   for (const p of points) {
     const key = keyFn(p.ts);
@@ -212,19 +203,6 @@ function fillWeeklyGaps(rows: AggRow[], monthKeyStr: string): AggRow[] {
   return keys.map((k) => map.get(k) ?? { date: k, tokens: 0, cost: 0 });
 }
 
-/// monthly: 선택 년의 1월~(올해면 이번 달, 아니면 12월) 을 0 으로 채움.
-function fillMonthlyGaps(rows: AggRow[], year: string): AggRow[] {
-  if (!year) return rows;
-  const now = new Date();
-  const maxMonth = Number(year) === now.getFullYear() ? now.getMonth() + 1 : 12;
-  const keys: string[] = [];
-  for (let mo = 1; mo <= maxMonth; mo++) {
-    keys.push(`${year}-${String(mo).padStart(2, "0")}`);
-  }
-  const map = new Map(rows.map((r) => [r.date, r]));
-  return keys.map((k) => map.get(k) ?? { date: k, tokens: 0, cost: 0 });
-}
-
 export function Dashboard() {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -235,7 +213,9 @@ export function Dashboard() {
   );
   const [dailyGranularity, setDailyGranularity] = usePersistentState<Granularity>(
     "madup-token-monitor:dash:dailyGranularity",
-    "daily"
+    "daily",
+    // 월별 옵션 제거 전 저장된 값("monthly")이 남아있으면 기본값으로 되돌린다.
+    (v): v is Granularity => v === "hourly" || v === "daily" || v === "weekly"
   );
   const [granularityAuto, setGranularityAuto] = usePersistentState(
     "madup-token-monitor:view:dash:granularityAuto",
@@ -247,7 +227,6 @@ export function Dashboard() {
     "7d"
   );
   const [selectedMonth, setSelectedMonth] = useState<string>("");
-  const [selectedYear, setSelectedYear] = useState<string>("");
   const [dailyMetric, setDailyMetric] = usePersistentState<"tokens" | "cost">(
     "madup-token-monitor:dash:dailyMetric",
     "tokens"
@@ -334,17 +313,9 @@ export function Dashboard() {
     for (const p of tsAll ?? []) set.add(monthKey(p.ts));
     return Array.from(set).sort().reverse();
   }, [tsAll]);
-  const availableYears = useMemo(() => {
-    const set = new Set<string>();
-    for (const p of tsAll ?? []) set.add(yearKey(p.ts));
-    return Array.from(set).sort().reverse();
-  }, [tsAll]);
   const effectiveMonth = availableMonths.includes(selectedMonth)
     ? selectedMonth
     : (availableMonths[0] ?? "");
-  const effectiveYear = availableYears.includes(selectedYear)
-    ? selectedYear
-    : (availableYears[0] ?? "");
 
   const dailyAggregated = useMemo<AggRow[]>(() => {
     if (dailyGranularity === "hourly") {
@@ -353,16 +324,11 @@ export function Dashboard() {
     if (dailyGranularity === "daily") {
       return aggregateByPeriod(tsDaily ?? [], "daily");
     }
-    if (dailyGranularity === "weekly") {
-      const all = aggregateByPeriod(tsAll ?? [], "weekly");
-      return all.filter(
-        (w) => monthKey(new Date(w.date + "T00:00:00").getTime()) === effectiveMonth
-      );
-    }
-    return aggregateByPeriod(tsAll ?? [], "monthly").filter((m) =>
-      m.date.startsWith(effectiveYear + "-")
+    const all = aggregateByPeriod(tsAll ?? [], "weekly");
+    return all.filter(
+      (w) => monthKey(new Date(w.date + "T00:00:00").getTime()) === effectiveMonth
     );
-  }, [dailyGranularity, tsDaily, tsToday, tsAll, effectiveMonth, effectiveYear]);
+  }, [dailyGranularity, tsDaily, tsToday, tsAll, effectiveMonth]);
 
   const dailyLimit = DAILY_CARD_LIMIT[dailyRange] ?? 30;
   // 빈 시간/날짜/주/월을 0 으로 채워 차트·리스트에서 누락 없이 연속 표시.
@@ -373,11 +339,8 @@ export function Dashboard() {
     if (dailyGranularity === "daily") {
       return fillDailyGaps(dailyAggregated, dailyLimit);
     }
-    if (dailyGranularity === "weekly") {
-      return fillWeeklyGaps(dailyAggregated, effectiveMonth);
-    }
-    return fillMonthlyGaps(dailyAggregated, effectiveYear);
-  }, [dailyGranularity, dailyAggregated, dailyLimit, effectiveMonth, effectiveYear]);
+    return fillWeeklyGaps(dailyAggregated, effectiveMonth);
+  }, [dailyGranularity, dailyAggregated, dailyLimit, effectiveMonth]);
 
   // 7d 합산 / 월간 합산.
   const thisWeek = useMemo(() => calcRange(tsMonth ?? [], "this-week", nowMs), [tsMonth, nowMs]);
@@ -705,19 +668,12 @@ export function Dashboard() {
                     options={RANGES.map((r) => ({ value: r.value, label: t(r.label) }))}
                     ariaLabel="기간 선택"
                   />
-                ) : dailyGranularity === "weekly" ? (
+                ) : (
                   <Select
                     value={effectiveMonth}
                     onChange={setSelectedMonth}
                     options={availableMonths.map((m) => ({ value: m, label: monthLabel(m) }))}
                     ariaLabel="월 선택"
-                  />
-                ) : (
-                  <Select
-                    value={effectiveYear}
-                    onChange={setSelectedYear}
-                    options={availableYears.map((y) => ({ value: y, label: yearLabel(y) }))}
-                    ariaLabel="년 선택"
                   />
                 )}
               </>
@@ -734,9 +690,7 @@ export function Dashboard() {
                 ? `${r.date.slice(11, 13)}시`
                 : dailyGranularity === "weekly"
                   ? weekLabel(r.date)
-                  : dailyGranularity === "monthly"
-                    ? monthLabel(r.date)
-                    : r.date.slice(5)
+                  : r.date.slice(5)
             }
             onCopy={copyDailyToClipboard}
             emptyText={t("dashboard.empty")}
