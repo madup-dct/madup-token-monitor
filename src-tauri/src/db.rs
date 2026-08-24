@@ -32,7 +32,7 @@ pub fn open() -> Result<Connection> {
     Ok(conn)
 }
 
-fn migrate(conn: &Connection) -> Result<()> {
+pub(crate) fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS usage_events (
             id              INTEGER PRIMARY KEY,
