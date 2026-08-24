@@ -3,6 +3,19 @@ use crate::models::{ToolCall, UsageEvent};
 use std::path::Path;
 
 #[test]
+fn pi_sessions_are_watched_and_classified_separately() {
+    let home = Path::new("/users/example");
+    let codex_home = home.join(".codex");
+    let pi_session = home.join(".pi/agent/sessions/project/session.jsonl");
+
+    let dirs = watch_dirs_for(home, &codex_home);
+    let source = detect_source_for(&pi_session, &codex_home.join("sessions"));
+
+    assert!(dirs.contains(&home.join(".pi/agent/sessions")));
+    assert_eq!(source, "pi");
+}
+
+#[test]
 fn configured_codex_home_is_watched_and_classified_as_codex() {
     // Given: Codex is running from an isolated home with another account token.
     let home = Path::new("/users/example");

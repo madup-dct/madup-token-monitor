@@ -235,6 +235,11 @@ bash scripts/release.sh
 - GPT-5.6 Codex 모델(`gpt-5.6-sol/terra/luna`) 단가는 `src-tauri/pricing.json`에 공식 가격 기준으로
   등록한다. 새 모델 추가 시 `pricing.rs` 회귀 테스트도 함께 갱신한다.
 
+### 6.10.1 Pi에서 사용한 Codex 토큰 수집
+- Pi 세션 `~/.pi/agent/sessions/**/*.jsonl`도 watcher가 감시한다.
+- Pi는 한 세션에서 여러 provider를 쓸 수 있으므로 `message.provider == "openai-codex"`인 assistant 응답만 수집하고, 기존 대시보드와 합쳐지도록 source는 `codex`로 저장한다.
+- 토큰은 `message.usage.{input,output,cacheRead,cacheWrite}`에서 읽으며, Pi line id와 provider response id를 DB dedup key로 사용한다.
+
 ### 6.11 시크릿 커밋 방지 = GitHub 전용 (public repo, 로컬 강제 없음)
 - 두 겹 모두 GitHub 쪽에서 돈다 (개발자 로컬 설정 불필요). 가이드는 `docs/GITLEAKS.md`.
   1. **Push Protection (예방)** — 네이티브 secret scanning + push protection. push 순간
@@ -290,9 +295,10 @@ bash scripts/release.sh
 
 ```
 ~/.claude/projects/**/*.jsonl, ~/.codex/sessions/**/*.jsonl,
-<resolved Codex account home>/sessions/**/*.jsonl (기본 홈과 다를 때), ~/.gemini/**
+<resolved Codex account home>/sessions/**/*.jsonl (기본 홈과 다를 때),
+~/.pi/agent/sessions/**/*.jsonl, ~/.gemini/**
   ↓ (watcher.rs: notify crate)
-parser.rs → parser/{claude,codex,opencode}.rs → usage_events table (SQLite)
+parser.rs → parser/{claude,codex,opencode,pi}.rs → usage_events table (SQLite)
   ↓ get_summary (summary.rs) / get_timeseries / get_heatmap / get_top_* (commands.rs)
 React (useUsage.ts) → Dashboard / MCP / Plugins
   ↓ (5분 주기 + 사용량 변경 이벤트·팝오버 표시(window-shown, 60초 throttle 공유) + 수동 sync)

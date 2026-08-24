@@ -154,6 +154,7 @@ fn watch_dirs_for(home: &Path, codex_home: &Path) -> Vec<PathBuf> {
     let mut dirs = vec![
         home.join(".claude").join("projects"),
         default_codex_sessions.clone(),
+        home.join(".pi").join("agent").join("sessions"),
     ];
     if account_codex_sessions != default_codex_sessions {
         dirs.push(account_codex_sessions);
@@ -342,6 +343,8 @@ fn detect_source_for(path: &Path, codex_sessions: &Path) -> String {
     let s = path.to_string_lossy();
     if path.starts_with(codex_sessions) {
         "codex".to_owned()
+    } else if s.contains(".pi/agent/sessions") || s.contains(".pi\\agent\\sessions") {
+        "pi".to_owned()
     } else if s.contains(".claude") {
         "claude".to_owned()
     } else if s.contains(".codex") || s.contains("codex-runtime-home") {

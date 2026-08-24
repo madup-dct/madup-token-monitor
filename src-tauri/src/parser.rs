@@ -4,6 +4,7 @@ use serde_json::Value;
 mod claude;
 mod codex;
 mod opencode;
+mod pi;
 
 #[derive(Clone, Default)]
 pub struct ParseState {
@@ -17,7 +18,7 @@ pub struct JsonlChunk<'a> {
     pub session_id: Option<&'a str>,
 }
 
-/// Parses accumulated JSONL text for `source` (claude|codex|opencode).
+/// Parses accumulated JSONL text for `source` (claude|codex|opencode|pi).
 /// Returns (events, tool_calls). Incomplete trailing line is returned as `leftover`.
 pub fn parse_jsonl(
     source: &str,
@@ -94,6 +95,15 @@ pub fn parse_jsonl_chunk(
                     session_id: chunk.session_id,
                 };
                 if let Some(event) = opencode::parse_line(&val, context) {
+                    events.push(event);
+                }
+            }
+            "pi" => {
+                let context = pi::LineContext {
+                    project: chunk.project,
+                    session_id: chunk.session_id,
+                };
+                if let Some(event) = pi::parse_line(&val, context) {
                     events.push(event);
                 }
             }
