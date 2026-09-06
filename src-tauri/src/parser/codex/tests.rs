@@ -139,3 +139,37 @@ fn test_legacy_restart_is_deduplicated() {
         .unwrap();
     assert_eq!(row_count, 1);
 }
+
+#[test]
+fn test_gpt_6_astra_max_counts_and_prices_usage_once() {
+    let turn = serde_json::json!({
+        "type": "turn_context",
+        "payload": {"turn_id": "astra-turn", "model": "gpt-6-astra", "effort": "max"}
+    });
+    let usage = serde_json::json!({
+        "input_tokens": 100_000,
+        "cached_input_tokens": 40_000,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 1_000,
+        "reasoning_output_tokens": 800,
+        "total_tokens": 101_000
+    });
+    let token = serde_json::json!({
+        "timestamp": "2026-09-06T01:00:00Z",
+        "type": "event_msg",
+        "payload": {"type": "token_count", "info": {
+            "total_token_usage": usage,
+            "last_token_usage": usage,
+            "model_context_window": 828_400
+        }}
+    });
+    let text = format!("{turn}\n{token}\n{token}\n");
+    let (events, _, _) = parse_jsonl("codex", &text, None, Some("astra-session"));
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].model.as_deref(), Some("gpt-6-astra"));
+    assert_eq!(events[0].input_tokens, Some(60_000));
+    assert_eq!(events[0].cache_read, Some(40_000));
+    assert_eq!(events[0].output_tokens, Some(1_000));
+    assert!((events[0].cost_usd.unwrap() - 0.69).abs() < 1e-9);
+}
