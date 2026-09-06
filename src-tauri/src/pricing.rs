@@ -13,6 +13,15 @@ const EMBEDDED_PRICING: &str = include_str!("../pricing.json");
 pub struct ModelPrice {
     pub input_usd_per_mtok: f64,
     pub output_usd_per_mtok: f64,
+    #[serde(default)]
+    long_context: Option<LongContextPrice>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct LongContextPrice {
+    above_input_tokens: i64,
+    input_usd_per_mtok: f64,
+    output_usd_per_mtok: f64,
 }
 
 type PriceTable = HashMap<String, ModelPrice>;
@@ -66,14 +75,24 @@ pub fn calc_cost_usd(
     });
 
     if let Some(p) = price {
-        let input_cost = (input_tokens as f64 / 1_000_000.0) * p.input_usd_per_mtok;
-        let output_cost = (output_tokens as f64 / 1_000_000.0) * p.output_usd_per_mtok;
+        // 긴 컨텍스트 요율은 캐시를 포함한 요청 전체 입력으로 판정한다.
+        // 출력/추론 토큰 수와 누적 세션 토큰 수는 임계값에 포함하지 않는다.
+        let prompt_tokens = input_tokens
+            .saturating_add(cache_read)
+            .saturating_add(cache_write_5m)
+            .saturating_add(cache_write_1h);
+        let (input_rate, output_rate) = p
+            .long_context
+            .as_ref()
+            .filter(|tier| prompt_tokens > tier.above_input_tokens)
+            .map(|tier| (tier.input_usd_per_mtok, tier.output_usd_per_mtok))
+            .unwrap_or((p.input_usd_per_mtok, p.output_usd_per_mtok));
+        let input_cost = (input_tokens as f64 / 1_000_000.0) * input_rate;
+        let output_cost = (output_tokens as f64 / 1_000_000.0) * output_rate;
         // Anthropic 공식: cache_read = input * 0.1, cache_write_5m = input * 1.25, cache_write_1h = input * 2.0
-        let cache_read_cost = (cache_read as f64 / 1_000_000.0) * p.input_usd_per_mtok * 0.1;
-        let cache_write_5m_cost =
-            (cache_write_5m as f64 / 1_000_000.0) * p.input_usd_per_mtok * 1.25;
-        let cache_write_1h_cost =
-            (cache_write_1h as f64 / 1_000_000.0) * p.input_usd_per_mtok * 2.0;
+        let cache_read_cost = (cache_read as f64 / 1_000_000.0) * input_rate * 0.1;
+        let cache_write_5m_cost = (cache_write_5m as f64 / 1_000_000.0) * input_rate * 1.25;
+        let cache_write_1h_cost = (cache_write_1h as f64 / 1_000_000.0) * input_rate * 2.0;
         input_cost + output_cost + cache_read_cost + cache_write_5m_cost + cache_write_1h_cost
     } else {
         0.0
@@ -159,6 +178,34 @@ mod tests {
     fn test_calc_cost_unknown_model() {
         let cost = calc_cost_usd("unknown-model-xyz", 1_000_000, 1_000_000, 0, 0, 0);
         assert_eq!(cost, 0.0);
+    }
+
+    #[test]
+    fn test_calc_cost_gpt_6_astra_standard_rates() {
+        // https://developers.openai.com/api/docs/models/gpt-6-astra
+        // Standard rates per 1M: input $10, cached input $1, output $50.
+        for model in ["gpt-6-astra", "gpt-6-astra-2026-09-03"] {
+            let cost = calc_cost_usd(model, 60_000, 1_000, 40_000, 0, 0);
+            assert!((cost - 0.69).abs() < 1e-9, "{model} cost={cost}");
+        }
+    }
+
+    #[test]
+    fn test_calc_cost_gpt_6_astra_long_context_boundary_includes_cache() {
+        // Only requests ABOVE 272K input tokens use 2x input/cache and 1.5x output.
+        let at_limit = calc_cost_usd("gpt-6-astra", 172_000, 1_000, 100_000, 0, 0);
+        let above_limit = calc_cost_usd("gpt-6-astra", 172_001, 1_000, 100_000, 0, 0);
+        assert!((at_limit - 1.87).abs() < 1e-9, "at_limit={at_limit}");
+        assert!(
+            (above_limit - 3.71502).abs() < 1e-9,
+            "above_limit={above_limit}"
+        );
+    }
+
+    #[test]
+    fn test_calc_cost_gpt_6_astra_large_output_does_not_trigger_long_context() {
+        let cost = calc_cost_usd("gpt-6-astra", 100_000, 200_000, 0, 0, 0);
+        assert!((cost - 11.0).abs() < 1e-9, "cost={cost}");
     }
 
     #[test]

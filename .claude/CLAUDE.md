@@ -213,6 +213,12 @@ bash scripts/release.sh
 - `db.rs::recalc_zero_cost_events` 가 앱 시작 시 cost=0 이벤트를 현재 단가표로 소급 보정
   → 단가 추가 후 릴리즈하면 각 기기 로컬 DB 가 자동 치유되고 다음 sync 가 Supabase 를 덮어쓴다.
   Supabase 직접 UPDATE 는 금물 — hourly sync(최근 30일, merge-duplicates 치환)가 되돌린다.
+- GPT-6 Astra도 같은 단가 누락으로 v0.9.6에서 토큰은 저장되지만 비용이 0으로 계산됐다.
+  `pricing.json`의 Astra 단가와 선택적 `long_context` 요율을 함께 유지한다.
+  [공식 단가](https://developers.openai.com/api/docs/models/gpt-6-astra): 1M당 입력 $10,
+  캐시 읽기 $1, 출력 $50. 요청 입력(캐시 포함)이 272K를 **초과**하면 전체 요청에
+  입력·캐시 2배, 출력 1.5배를 적용한다. 세션 누적량이나 reasoning effort로 판정하지 않는다.
+  이는 Standard API 환산 비용이며 Fast/Batch/Flex 및 구독 요금 계산은 포함하지 않는다.
 
 ### 6.9 Supabase RPC 날짜 경계는 `kst_today()` — `current_date`(UTC) 금지
 - 날짜 버킷(`usage_aggregates.date` 등)은 클라이언트가 KST 달력 날짜로 만들지만

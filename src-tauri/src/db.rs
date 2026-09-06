@@ -365,6 +365,43 @@ mod tests {
         assert_eq!(get_sync_state(&conn, SYNC_WM_USAGE).as_deref(), Some("100"));
     }
 
+    #[test]
+    fn test_gpt_6_astra_backfill_preserves_tokens_and_resets_usage_sync_once() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO usage_events
+                (source, model, ts, input_tokens, output_tokens, cache_read, cost_usd)
+             VALUES ('codex', 'gpt-6-astra', 1, 60000, 1000, 40000, 0.0),
+                    ('codex', 'gpt-6-astra', 2, 50000, 1000, 250000, NULL);",
+        )
+        .unwrap();
+        set_sync_state(&conn, SYNC_WM_USAGE, "2").unwrap();
+        set_sync_state(&conn, SYNC_WM_TOOL, "50").unwrap();
+
+        migrate(&conn).unwrap();
+
+        let (rows, tokens, cost): (i64, i64, f64) = conn
+            .query_row(
+                "SELECT COUNT(*), SUM(input_tokens + output_tokens + cache_read), SUM(cost_usd)
+                 FROM usage_events",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(rows, 2);
+        assert_eq!(tokens, 402_000);
+        assert!((cost - (0.69 + 1.575)).abs() < 1e-9, "cost={cost}");
+        assert_eq!(get_sync_state(&conn, SYNC_WM_USAGE), None);
+        assert_eq!(get_sync_state(&conn, SYNC_WM_TOOL).as_deref(), Some("50"));
+        assert_eq!(get_sync_state(&conn, SYNC_RECALC_GEN).as_deref(), Some("1"));
+
+        set_sync_state(&conn, SYNC_WM_USAGE, "2").unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(get_sync_state(&conn, SYNC_WM_USAGE).as_deref(), Some("2"));
+        assert_eq!(get_sync_state(&conn, SYNC_RECALC_GEN).as_deref(), Some("1"));
+    }
+
     // 회귀: cost 소급 보정(fixed>0)이 일어나면 usage 워터마크 삭제 + 세대 증가로
     // 다음 sync 가 전체 재업로드(백필)로 동작해야 한다. tool 워터마크는 cost 와 무관해 유지.
     #[test]
