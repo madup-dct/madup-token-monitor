@@ -3,7 +3,7 @@
 버전별 패치 내역. 최신 버전이 위. README 의 "최근 패치" 섹션은 이 파일의 맨 위 항목만 요약한다.
 설치 파일은 [GitHub Releases](https://github.com/madup-dct/madup-token-monitor/releases) 참고.
 
-## v0.9.8 — 미발행
+## v0.9.8 — 2026-09-10
 
 ### 수정 사항
 
