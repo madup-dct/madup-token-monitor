@@ -143,15 +143,26 @@ pub(crate) fn migrate(conn: &Connection) -> Result<()> {
         );
     }
 
-    // ── cost=0 이벤트 재계산 ────────────────────────────────────────────────
-    // 단가표에 없던 신규 모델(예: claude-fable-5)이 cost_usd=0 으로 적재된 이벤트를
+    // ── cost 재계산 ─────────────────────────────────────────────────────────
+    // 기본: 단가표에 없던 신규 모델(예: claude-fable-5)이 cost_usd=0 으로 적재된 이벤트만
     // 현재 단가표로 보정. 단가가 여전히 없는 모델(<synthetic> 등)은 0 유지라 idempotent.
+    // 단가표 지문이 이전 기동과 다르면(단가 교정 릴리즈 후 첫 기동·구버전 업그레이드)
+    // cost>0 이벤트까지 전량 재계산 — 2026-09 Sonnet 5·Fable 5.1 과대 계상 소급 경로.
     //
-    // 보정(UPDATE) + 워터마크 삭제 + 세대 증가를 한 트랜잭션으로 묶는다 —
+    // 보정(UPDATE) + 워터마크 삭제 + 세대 증가 + 지문 기록을 한 트랜잭션으로 묶는다 —
     // "보정은 됐는데 재업로드 강제는 누락" 되는 부분 실패를 차단하고,
     // 실패 시 전체 롤백돼 다음 open 의 recalc 가 처음부터 재시도한다 (자가복구).
+    let fingerprint = crate::pricing::price_table_fingerprint();
+    let price_table_changed =
+        get_sync_state(conn, PRICING_FINGERPRINT).as_deref() != Some(fingerprint.as_str());
     if let Ok(tx) = conn.unchecked_transaction() {
-        match recalc_zero_cost_events(&tx) {
+        let recalc = recalc_cost_events(&tx, price_table_changed).and_then(|fixed| {
+            if price_table_changed {
+                set_sync_state(&tx, PRICING_FINGERPRINT, &fingerprint)?;
+            }
+            Ok(fixed)
+        });
+        match recalc {
             Ok(fixed) if fixed > 0 => {
                 // cost 소급 보정은 기존 usage_events row(id ≤ 워터마크)를 바꾸므로
                 // usage 워터마크만 삭제해 1회 전체 재업로드를 강제한다
@@ -193,6 +204,9 @@ pub const SYNC_LAST_USER: &str = "last_synced_user_id";
 /// cost 소급 보정 세대 — recalc 가 row 를 고칠 때마다 +1. sync 는 시작/종료 세대가
 /// 다르면 워터마크를 전진시키지 않아, 보정 직후의 전체 재업로드 강제가 덮어써지지 않는다.
 pub const SYNC_RECALC_GEN: &str = "recalc_generation";
+/// 마지막 기동에서 적용한 단가표 지문(pricing::price_table_fingerprint). 불일치·미기록이면
+/// migrate 가 cost>0 이벤트까지 전량 재계산한다.
+pub const PRICING_FINGERPRINT: &str = "pricing_fingerprint";
 
 pub fn get_sync_state(conn: &Connection, key: &str) -> Option<String> {
     conn.query_row(
@@ -211,32 +225,42 @@ pub fn set_sync_state(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-/// cost_usd=0 으로 기록된 이벤트를 현재 단가표 기준으로 재계산.
-/// 단가 매칭 실패로 0 이었던 모델이 이후 pricing.json 에 추가되면 여기서 소급 보정된다.
-fn recalc_zero_cost_events(conn: &Connection) -> Result<usize> {
-    let mut stmt = conn.prepare(
+/// (id, model, input, output, cache_read, cache_write, cache_write_5m, cache_write_1h, cost_usd)
+type CostRow = (i64, String, i64, i64, i64, i64, i64, i64, f64);
+
+/// 이벤트 cost_usd 를 현재 단가표 기준으로 재계산. 값이 달라진 row 수를 돌려준다.
+/// `all_rows=false`: cost=0/NULL 만 — 단가 매칭 실패로 0 이었던 모델이 이후 pricing.json 에
+/// 추가되면 소급 보정. `all_rows=true`: 단가표 자체가 바뀐 뒤 첫 기동 — cost>0 row 도 재계산.
+fn recalc_cost_events(conn: &Connection, all_rows: bool) -> Result<usize> {
+    let cost_filter = if all_rows {
+        "1 = 1"
+    } else {
+        "(cost_usd = 0 OR cost_usd IS NULL)"
+    };
+    let mut stmt = conn.prepare(&format!(
         "SELECT id, model, COALESCE(input_tokens,0), COALESCE(output_tokens,0),
                 COALESCE(cache_read,0), COALESCE(cache_write,0),
-                COALESCE(cache_write_5m,0), COALESCE(cache_write_1h,0)
+                COALESCE(cache_write_5m,0), COALESCE(cache_write_1h,0),
+                COALESCE(cost_usd,0.0)
          FROM usage_events
-         WHERE (cost_usd = 0 OR cost_usd IS NULL) AND model IS NOT NULL AND model != ''",
-    )?;
-    let rows: Vec<(i64, String, i64, i64, i64, i64, i64, i64)> = stmt
+         WHERE {cost_filter} AND model IS NOT NULL AND model != ''"
+    ))?;
+    let rows: Vec<CostRow> = stmt
         .query_map([], |r| {
             Ok((
                 r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?,
-                r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?,
+                r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?,
             ))
         })?
         .flatten()
         .collect();
 
     let mut fixed = 0;
-    for (id, model, inp, out, cr, cw, cw5, cw1) in rows {
+    for (id, model, inp, out, cr, cw, cw5, cw1, old_cost) in rows {
         // 5m/1h 분리 컬럼이 비어 있는 옛 이벤트는 cache_write 전체를 5m(1.25x, 보수적)로 간주.
         let (cw5, cw1) = if cw5 == 0 && cw1 == 0 { (cw, 0) } else { (cw5, cw1) };
         let cost = crate::pricing::calc_cost_usd(&model, inp, out, cr, cw5, cw1);
-        if cost > 0.0 {
+        if (cost - old_cost).abs() > 1e-9 {
             conn.execute(
                 "UPDATE usage_events SET cost_usd = ?1 WHERE id = ?2",
                 params![cost, id],
@@ -332,7 +356,7 @@ mod tests {
         )
         .unwrap();
 
-        let fixed = recalc_zero_cost_events(&conn).unwrap();
+        let fixed = recalc_cost_events(&conn, false).unwrap();
         assert_eq!(fixed, 2, "fable 2건만 보정 (<synthetic> 0 유지, 기존 cost>0 미변경)");
 
         let fable: f64 = conn
@@ -400,6 +424,75 @@ mod tests {
         migrate(&conn).unwrap();
         assert_eq!(get_sync_state(&conn, SYNC_WM_USAGE).as_deref(), Some("2"));
         assert_eq!(get_sync_state(&conn, SYNC_RECALC_GEN).as_deref(), Some("1"));
+    }
+
+    // 회귀: 단가표가 바뀌면(지문 불일치·미기록) cost>0 이던 이벤트도 현재 단가로 재계산.
+    // 2026-09 Sonnet 5($3→$2)·Fable 5.1 cache read($1→$0.25) 교정이 기존 설치에 소급되는 경로.
+    #[test]
+    fn test_reprice_events_when_price_table_changes() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        // 빈 DB 첫 기동: 지문만 기록, 보정 대상 없음 → 세대 증가 없음.
+        assert_eq!(
+            get_sync_state(&conn, PRICING_FINGERPRINT),
+            Some(crate::pricing::price_table_fingerprint())
+        );
+        assert_eq!(get_sync_state(&conn, SYNC_RECALC_GEN), None);
+
+        // 옛 단가(generic sonnet $3)로 적재된 sonnet-5 + 단가 불변인 opus-4-8.
+        conn.execute_batch(
+            "INSERT INTO usage_events (source, model, ts, input_tokens, cost_usd)
+             VALUES ('claude', 'claude-sonnet-5', 1, 1000000, 3.0),
+                    ('claude', 'claude-opus-4-8', 2, 1000000, 5.0);",
+        )
+        .unwrap();
+        set_sync_state(&conn, SYNC_WM_USAGE, "2").unwrap();
+        set_sync_state(&conn, SYNC_WM_TOOL, "50").unwrap();
+
+        // 지문 일치 → cost>0 row 는 건드리지 않는다 (기동마다 풀스캔 금지).
+        migrate(&conn).unwrap();
+        let stale: f64 = conn
+            .query_row("SELECT cost_usd FROM usage_events WHERE ts = 1", [], |r| r.get(0))
+            .unwrap();
+        assert!((stale - 3.0).abs() < 1e-9, "지문 일치 시 미보정, got {stale}");
+        assert_eq!(get_sync_state(&conn, SYNC_WM_USAGE).as_deref(), Some("2"));
+
+        // 지문 불일치(단가표 갱신 후 첫 기동) → 전체 재계산 + usage 워터마크 리셋 + 세대 +1.
+        set_sync_state(&conn, PRICING_FINGERPRINT, "stale").unwrap();
+        migrate(&conn).unwrap();
+        let fixed: f64 = conn
+            .query_row("SELECT cost_usd FROM usage_events WHERE ts = 1", [], |r| r.get(0))
+            .unwrap();
+        assert!((fixed - 2.0).abs() < 1e-9, "sonnet-5 1M input → $2, got {fixed}");
+        let unchanged: f64 = conn
+            .query_row("SELECT cost_usd FROM usage_events WHERE ts = 2", [], |r| r.get(0))
+            .unwrap();
+        assert!((unchanged - 5.0).abs() < 1e-9, "opus-4-8 는 그대로, got {unchanged}");
+        assert_eq!(get_sync_state(&conn, SYNC_WM_USAGE), None);
+        assert_eq!(get_sync_state(&conn, SYNC_WM_TOOL).as_deref(), Some("50"));
+        assert_eq!(get_sync_state(&conn, SYNC_RECALC_GEN).as_deref(), Some("1"));
+        assert_eq!(
+            get_sync_state(&conn, PRICING_FINGERPRINT),
+            Some(crate::pricing::price_table_fingerprint())
+        );
+
+        // 지문 미기록(구버전에서 업그레이드) 도 불일치로 취급해 재계산한다.
+        conn.execute(
+            "UPDATE usage_events SET cost_usd = 3.0 WHERE ts = 1",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "DELETE FROM sync_state WHERE key = ?1",
+            params![PRICING_FINGERPRINT],
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        let upgraded: f64 = conn
+            .query_row("SELECT cost_usd FROM usage_events WHERE ts = 1", [], |r| r.get(0))
+            .unwrap();
+        assert!((upgraded - 2.0).abs() < 1e-9, "지문 미기록 → 재계산, got {upgraded}");
+        assert_eq!(get_sync_state(&conn, SYNC_RECALC_GEN).as_deref(), Some("2"));
     }
 
     // 회귀: cost 소급 보정(fixed>0)이 일어나면 usage 워터마크 삭제 + 세대 증가로
