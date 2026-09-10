@@ -11,6 +11,17 @@
 - Slack 로그인 후 팀 채팅과 사내 집계 기능을 사용할 수 있습니다.
 - **모든 원시 데이터는 로컬에만 저장되며, 집계 전송은 옵트인입니다.**
 
+## 최근 패치
+
+**v0.9.8 (미발행) — Claude 비용 과대 계상 교정**
+
+- Claude Sonnet 5 가 이전 세대 단가($3/$15)로 계산되던 문제를 공식 $2/$10 으로 교정 (−33.3%).
+- Claude Fable 5.1 캐시 읽기 단가 $1.00 → 공식 $0.25/MTok 교정 (캐시 비중 95% 계정 실측 −34.7%).
+- 업데이트 후 첫 실행에서 로컬 DB 를 자동 재계산하고 다음 동기화에서 리더보드에 반영. 토큰 수는 변동 없음.
+- Pi 세션 수집 제거.
+
+전체 이력은 [`docs/RELEASE_NOTES.md`](docs/RELEASE_NOTES.md) 참고.
+
 ## 설치
 
 1. [Releases](https://github.com/madup-dct/madup-token-monitor/releases/latest) 에서 본인 플랫폼에 맞는 파일 다운로드

@@ -126,6 +126,7 @@ pnpm tauri build
 ```bash
 # 1) 코드 변경 + version 일치
 #    package.json + src-tauri/tauri.conf.json 둘 다 동일한 SemVer 로 갱신 후 commit
+#    + docs/RELEASE_NOTES.md 맨 위에 버전 항목 추가, README "최근 패치" 를 최신 1건으로 교체 (§8 릴리즈 노트 규칙)
 # 2) 서명 키 export (docs/AUTO_UPDATE_SETUP.md 1.1/1.2)
 export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/madup-token-monitor.key)"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD='<생성 시 비밀번호>'
@@ -210,9 +211,20 @@ bash scripts/release.sh
   로컬·Supabase 모두 비용 0 으로 집계된다 (2026-06 claude-fable-5 사고: 전사 7명 ~$600 누락).
 - **새 Claude/GPT/Gemini 모델 출시 시 pricing.json 에 키 추가 + 세대 generic 키 유지**
   (예: `claude-fable`). `pricing.rs` 에 회귀 테스트 패턴 있음.
-- `db.rs::recalc_zero_cost_events` 가 앱 시작 시 cost=0 이벤트를 현재 단가표로 소급 보정
+- `db.rs::recalc_cost_events` 가 앱 시작 시 cost=0 이벤트를 현재 단가표로 소급 보정
   → 단가 추가 후 릴리즈하면 각 기기 로컬 DB 가 자동 치유되고 다음 sync 가 Supabase 를 덮어쓴다.
   Supabase 직접 UPDATE 는 금물 — hourly sync(최근 30일, merge-duplicates 치환)가 되돌린다.
+- **단가가 틀렸던(cost>0) 이벤트도 자동 소급된다** — `pricing::price_table_fingerprint`(적용 중인
+  pricing.json 텍스트의 FNV-1a) 를 `sync_state.pricing_fingerprint` 에 기록하고, 불일치·미기록인
+  첫 기동에만 전 row 재계산 + usage 워터마크 리셋(전체 재업로드). 지문 일치 시엔 cost=0 만 본다.
+  pricing.json 을 한 글자라도 바꾸면 전사 기기가 1회 전량 재계산·재업로드된다 (49K row 실측 0.2초).
+  한계: 원격 `usage_hourly` 재업로드는 최근 30일 창이라 그보다 오래된 시간별 행은 옛 비용이 남는다
+  (일자별 `usage_aggregates` 는 전부 갱신).
+- **모델별 cache read 배율이 다르면 `cache_read_multiplier` 로 명시** (기본 0.1). 2026-09 실측:
+  `claude-sonnet-5` 키 누락 → generic `claude-sonnet`($3/$15)로 1.5배 과대, `claude-fable-5-1` →
+  `claude-fable-5` 매칭으로 cache read 0.1x($1.00) 적용 (공식 0.025x=$0.25). 세대 generic 키는
+  0 적재를 막지만 **세대 안에서 단가가 바뀐 신모델은 명시 키가 있어야 정확**하다 —
+  신모델 출시 시 [공식 단가표](https://platform.claude.com/docs/en/about-claude/pricing) 대조 필수.
 - GPT-6 Astra도 같은 단가 누락으로 v0.9.6에서 토큰은 저장되지만 비용이 0으로 계산됐다.
   `pricing.json`의 Astra 단가와 선택적 `long_context` 요율을 함께 유지한다.
   [공식 단가](https://developers.openai.com/api/docs/models/gpt-6-astra): 1M당 입력 $10,
@@ -240,11 +252,6 @@ bash scripts/release.sh
 - fork된 subagent rollout에 복사된 부모 turn은 제외하고, child 자신의 turn부터만 집계한다.
 - GPT-5.6 Codex 모델(`gpt-5.6-sol/terra/luna`) 단가는 `src-tauri/pricing.json`에 공식 가격 기준으로
   등록한다. 새 모델 추가 시 `pricing.rs` 회귀 테스트도 함께 갱신한다.
-
-### 6.10.1 Pi에서 사용한 Codex 토큰 수집
-- Pi 세션 `~/.pi/agent/sessions/**/*.jsonl`도 watcher가 감시한다.
-- Pi는 한 세션에서 여러 provider를 쓸 수 있으므로 `message.provider == "openai-codex"`인 assistant 응답만 수집하고, 기존 대시보드와 합쳐지도록 source는 `codex`로 저장한다.
-- 토큰은 `message.usage.{input,output,cacheRead,cacheWrite}`에서 읽으며, Pi line id와 provider response id를 DB dedup key로 사용한다.
 
 ### 6.11 시크릿 커밋 방지 = GitHub 전용 (public repo, 로컬 강제 없음)
 - 두 겹 모두 GitHub 쪽에서 돈다 (개발자 로컬 설정 불필요). 가이드는 `docs/GITLEAKS.md`.
@@ -302,9 +309,9 @@ bash scripts/release.sh
 ```
 ~/.claude/projects/**/*.jsonl, ~/.codex/sessions/**/*.jsonl,
 <resolved Codex account home>/sessions/**/*.jsonl (기본 홈과 다를 때),
-~/.pi/agent/sessions/**/*.jsonl, ~/.gemini/**
+~/.gemini/**
   ↓ (watcher.rs: notify crate)
-parser.rs → parser/{claude,codex,opencode,pi}.rs → usage_events table (SQLite)
+parser.rs → parser/{claude,codex,opencode}.rs → usage_events table (SQLite)
   ↓ get_summary (summary.rs) / get_timeseries / get_heatmap / get_top_* (commands.rs)
 React (useUsage.ts) → Dashboard / MCP / Plugins
   ↓ (5분 주기 + 사용량 변경 이벤트·팝오버 표시(window-shown, 60초 throttle 공유) + 수동 sync)
@@ -345,6 +352,10 @@ rowid 재사용으로 워터마크가 신규 이벤트를 영구 누락시킨다
 - **버전**: SemVer. `package.json` 과 `src-tauri/tauri.conf.json` 두 곳을 항상 동시에 갱신.
 - **커밋**: Conventional Commits (`feat`, `fix`, `chore`, ...). 본문에 "왜" + "어떻게".
 - **Co-Authored-By**: Claude 가 만든 커밋엔 footer 에 명시 (rules/team-workflow 와 일치).
+- **릴리즈 노트 (2026-09-10 확정)**: 패치 공지는 Slack 메시지가 아니라 **`docs/RELEASE_NOTES.md`** 로.
+  사용자 영향이 있는 변경(비용 계산·수집 범위·UI 동작)은 릴리즈 노트에 버전 항목을 **최신 위**로 추가하고,
+  `README.md` 의 "최근 패치" 섹션은 **가장 최근 1건만** 요약 + 릴리즈 노트 링크를 유지한다 (누적 금지).
+  미발행 변경은 "vX.Y.Z — 미발행" 으로 두고 publish 시 날짜로 교체. GitHub Release 본문은 이 항목을 그대로 쓴다.
 - **공유 컴포넌트 일관성 (No-Duplicate UI 규칙)** — 같은 시각/UX 의 컴포넌트는
   한 곳에만 정의하고 모든 페이지에서 import. 새 페이지에서 비슷한 UI 가 필요해도
   인라인으로 다시 만들지 말 것. 인라인을 발견하면 공유 컴포넌트로 마이그레이션:
@@ -415,6 +426,7 @@ rowid 재사용으로 워터마크가 신규 이벤트를 영구 누락시킨다
 - [ ] 새 Tauri command 면 `lib.rs` 의 `invoke_handler!` 에 추가
 - [ ] 새 plugin 권한이면 `capabilities/default.json` 의 `permissions` 에 추가
 - [ ] 버전 bump 시 `package.json` + `src-tauri/tauri.conf.json` 둘 다 (스크립트가 불일치 시 중단)
+- [ ] 사용자 영향 변경이면 `docs/RELEASE_NOTES.md` 항목 추가 + README "최근 패치" 최신 1건으로 교체
 - [ ] `.env` 변수 새로 추가 시 로컬 `.env` 갱신 (CI 없음 — `scripts/release.sh` 는 로컬 `.env` 를 그대로 사용)
 
 ## 11. 자주 쓰는 명령
