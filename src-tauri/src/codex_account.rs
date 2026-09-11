@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 
 use crate::codex_limits::{CodexRateLimitSnapshot, RateLimitWindow};
-use crate::oauth_usage::LimitWindow;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CodexAccount {
@@ -20,8 +19,17 @@ pub struct CodexLimitUpload {
     pub account_id: String,
     pub account_email: Option<String>,
     pub plan_type: Option<String>,
-    pub windows: Vec<LimitWindow>,
+    pub windows: Vec<CodexLimitWindow>,
     pub fetched_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CodexLimitWindow {
+    pub kind: String,
+    pub scope_model: Option<String>,
+    pub utilization: f64,
+    pub resets_at: String,
+    pub observed_at: i64,
 }
 
 #[derive(Deserialize)]
@@ -143,18 +151,19 @@ fn window_rank(kind: &str) -> u8 {
 fn normalize_window(
     snapshot: &CodexRateLimitSnapshot,
     window: &RateLimitWindow,
-) -> Option<LimitWindow> {
+) -> Option<CodexLimitWindow> {
     let (kind, scope_model) = match (window.window_minutes, snapshot.limit_id.as_str()) {
         (300, _) => ("session", None),
         (10_080, "codex") => ("weekly_all", None),
         (10_080, _) => ("weekly_scoped", model_label(snapshot)),
         (_, _) => ("custom", Some(format!("{}분", window.window_minutes))),
     };
-    Some(LimitWindow {
+    Some(CodexLimitWindow {
         kind: kind.to_owned(),
         scope_model,
         utilization: window.used_percent,
         resets_at: chrono::DateTime::from_timestamp(window.resets_at, 0)?.to_rfc3339(),
+        observed_at: snapshot.observed_at,
     })
 }
 

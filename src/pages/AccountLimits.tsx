@@ -7,6 +7,7 @@ import { useAccountLimits } from "@/hooks/useRateLimits";
 import {
   formatRelativeTimeKo,
   formatResetKo,
+  isAccountWindowFresh,
   minRemaining,
   sortByRemainingDesc,
   usedPct,
@@ -21,9 +22,6 @@ const SORT_OPTIONS: { value: SortKind; label: string }[] = [
   { value: "weekly_scoped", label: "모델" },
 ];
 
-/// 마지막 갱신 30분 초과 → 흐리게 (죽은 데이터 오인 방지, 스펙 §4.4).
-const STALE_MS = 30 * 60_000;
-
 export default function AccountLimits() {
   const { data: rows = [], isLoading, error } = useAccountLimits();
   const [sortKind, setSortKind] = useState<SortKind>("weekly_scoped");
@@ -34,7 +32,7 @@ export default function AccountLimits() {
   }, []);
   const sorted = sortByRemainingDesc(
     rows,
-    (row) => row.windows.filter((window) => new Date(window.resets_at).getTime() > nowMs),
+    (row) => row.windows.filter((window) => isAccountWindowFresh(row, window, nowMs)),
     sortKind
   );
 
@@ -79,11 +77,9 @@ export default function AccountLimits() {
 }
 
 function AccountRow({ row, nowMs }: { readonly row: AccountLimitRow; readonly nowMs: number }) {
-  const updatedMs = new Date(row.updated_at).getTime();
-  const stale = !Number.isFinite(updatedMs) || nowMs - updatedMs > STALE_MS;
-  const activeWindows = row.windows.filter(
-    (window) => new Date(window.resets_at).getTime() > nowMs
-  );
+  const updatedMs = new Date(row.fetched_at).getTime();
+  const activeWindows = row.windows.filter((window) => isAccountWindowFresh(row, window, nowMs));
+  const stale = activeWindows.length === 0;
   const min = minRemaining(activeWindows);
   // 행 상태 점 = 가장 많이 쓴(최악) 창의 사용률.
   const worstUsed = min === null ? null : (100 - min) / 100;
@@ -119,7 +115,7 @@ function AccountRow({ row, nowMs }: { readonly row: AccountLimitRow; readonly no
           // 표기 숫자·게이지 채움은 사용률, 색은 잔여 기준 (트레이·패널과 통일).
           const used = usedPct(w.utilization);
           const resetMs = new Date(w.resets_at).getTime();
-          const resetOk = Number.isFinite(resetMs) && resetMs > nowMs;
+          const resetOk = isAccountWindowFresh(row, w, nowMs);
           return (
             <div key={`${w.kind}:${w.scope_model ?? i}`} className="min-w-0">
               <div className="flex items-center justify-between mb-1 gap-2">

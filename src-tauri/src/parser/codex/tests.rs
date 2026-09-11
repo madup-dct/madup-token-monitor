@@ -173,3 +173,108 @@ fn test_gpt_6_astra_max_counts_and_prices_usage_once() {
     assert_eq!(events[0].output_tokens, Some(1_000));
     assert!((events[0].cost_usd.unwrap() - 0.69).abs() < 1e-9);
 }
+
+fn cache_write_rollout(input: i64, read: i64, write: i64) -> String {
+    let turn = serde_json::json!({
+        "type": "turn_context",
+        "payload": {"turn_id": "cache-write-turn", "model": "gpt-6-astra"}
+    });
+    let usage = serde_json::json!({
+        "input_tokens": input, "cached_input_tokens": read,
+        "cache_write_input_tokens": write, "output_tokens": 1_000,
+        "reasoning_output_tokens": 800, "total_tokens": input + 1_000
+    });
+    let token = serde_json::json!({
+        "timestamp": "2026-09-11T01:00:00Z", "type": "event_msg",
+        "payload": {"type": "token_count", "info": {
+            "last_token_usage": usage, "total_token_usage": usage
+        }}
+    });
+    format!("{turn}\n{token}\n{token}\n")
+}
+
+#[test]
+fn test_cache_write_preserves_total_and_uses_request_context_tier() {
+    for (input, read, write, expected_cost) in [
+        (100_000, 40_000, 20_000, 0.74),
+        (272_000, 200_000, 50_000, 1.095),
+        (272_001, 200_000, 50_000, 2.16502),
+    ] {
+        let text = cache_write_rollout(input, read, write);
+        let (events, _, _) = parse_jsonl("codex", &text, None, Some("cache-session"));
+        assert_eq!(events.len(), 1);
+        let event = &events[0];
+        assert_eq!(event.input_tokens, Some(input - read - write));
+        assert_eq!(event.cache_read, Some(read));
+        assert_eq!(event.cache_write, Some(write));
+        assert_eq!(event.cache_write_5m, Some(0), "Codex does not report cache TTL");
+        assert_eq!(event.cache_write_1h, Some(0));
+        assert_eq!(
+            event.input_tokens.unwrap() + event.cache_read.unwrap()
+                + event.cache_write.unwrap() + event.output_tokens.unwrap(),
+            input + 1_000
+        );
+        assert!((event.cost_usd.unwrap() - expected_cost).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn test_cache_write_rejects_negative_overflow_and_overlapping_input() {
+    for (read, write) in [(40, -1), (40, 61), (40, i64::MAX)] {
+        let text = cache_write_rollout(100, read, write);
+        let (events, _, _) = parse_jsonl("codex", &text, None, Some("cache-session"));
+        assert!(events.is_empty());
+    }
+}
+
+#[test]
+fn test_cache_write_replay_repairs_old_row_once_and_resets_sync() {
+    use crate::db::{get_sync_state, migrate, set_sync_state, SYNC_RECALC_GEN, SYNC_WM_TOOL, SYNC_WM_USAGE};
+
+    let conn = Connection::open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+    let text = cache_write_rollout(100_000, 40_000, 20_000);
+    let (events, _, _) = parse_jsonl("codex", &text, None, Some("cache-session"));
+    let event = &events[0];
+    // v0.9.8: write tokens were included in ordinary input; dedup identity is unchanged.
+    conn.execute(
+        "INSERT INTO usage_events
+            (id, source, model, ts, input_tokens, output_tokens, cache_read, cache_write,
+             cache_write_5m, cache_write_1h, cost_usd, message_id, request_id)
+         VALUES (42, 'codex', 'gpt-6-astra', 1, 60000, 1000, 40000, 0, 0, 0, 0.69, ?1, ?2)",
+        rusqlite::params![event.message_id, event.request_id],
+    ).unwrap();
+    set_sync_state(&conn, SYNC_WM_USAGE, "42").unwrap();
+    set_sync_state(&conn, SYNC_WM_TOOL, "50").unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER fail_sync_generation BEFORE INSERT ON sync_state
+         WHEN NEW.key = 'recalc_generation' BEGIN SELECT RAISE(ABORT, 'test failure'); END;"
+    ).unwrap();
+    assert!(insert_usage_event(&conn, event).is_err());
+    let old_input: i64 = conn.query_row("SELECT input_tokens FROM usage_events", [], |r| r.get(0)).unwrap();
+    assert_eq!(old_input, 60_000, "failed sync reset must roll back the repair");
+    assert_eq!(get_sync_state(&conn, SYNC_WM_USAGE).as_deref(), Some("42"));
+    conn.execute_batch("DROP TRIGGER fail_sync_generation;").unwrap();
+    insert_usage_event(&conn, event).unwrap();
+
+    let (count, id, total, write, cost): (i64, i64, i64, i64, f64) = conn.query_row(
+        "SELECT COUNT(*), id, input_tokens + output_tokens + cache_read + cache_write,
+                cache_write, cost_usd FROM usage_events", [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+    ).unwrap();
+    assert_eq!((count, id, total, write), (1, 42, 101_000, 20_000));
+    assert!((cost - 0.74).abs() < 1e-9);
+    assert_eq!(get_sync_state(&conn, SYNC_WM_USAGE), None);
+    assert_eq!(get_sync_state(&conn, SYNC_WM_TOOL).as_deref(), Some("50"));
+    assert_eq!(get_sync_state(&conn, SYNC_RECALC_GEN).as_deref(), Some("1"));
+
+    set_sync_state(&conn, SYNC_WM_USAGE, "42").unwrap();
+    insert_usage_event(&conn, event).unwrap();
+    // A later price-table refresh must price the restored aggregate cache-write field too.
+    set_sync_state(&conn, crate::db::PRICING_FINGERPRINT, "old-price-table").unwrap();
+    migrate(&conn).unwrap();
+    assert_eq!(get_sync_state(&conn, SYNC_WM_USAGE).as_deref(), Some("42"));
+    assert_eq!(get_sync_state(&conn, SYNC_RECALC_GEN).as_deref(), Some("1"));
+    let cost: f64 = conn.query_row("SELECT cost_usd FROM usage_events", [], |r| r.get(0)).unwrap();
+    assert!((cost - 0.74).abs() < 1e-9);
+}

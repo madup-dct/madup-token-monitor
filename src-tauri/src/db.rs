@@ -272,7 +272,7 @@ fn recalc_cost_events(conn: &Connection, all_rows: bool) -> Result<usize> {
 }
 
 pub fn insert_usage_event(conn: &Connection, e: &UsageEvent) -> Result<()> {
-    conn.execute(
+    let inserted = conn.execute(
         "INSERT OR IGNORE INTO usage_events
             (source, model, ts, input_tokens, output_tokens, cache_read, cache_write, cache_write_5m, cache_write_1h, cost_usd, project, session_id, message_id, request_id)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
@@ -285,6 +285,33 @@ pub fn insert_usage_event(conn: &Connection, e: &UsageEvent) -> Result<()> {
             e.message_id, e.request_id,
         ],
     )?;
+    // 기동 시 백그라운드 재파싱에서 구버전이 일반 입력에 섞어 저장한 Codex 캐시 쓰기를
+    // 원본으로 복구한다. 기존 id/dedup key/토큰 총합은 보존하고 복구된 행만 갱신한다.
+    if inserted == 0 && e.source == "codex" && e.cache_write.unwrap_or(0) > 0 {
+        let tx = conn.unchecked_transaction()?;
+        let repaired = tx.execute(
+            "UPDATE usage_events
+             SET input_tokens = ?1, cache_write = ?2, cache_write_5m = ?3,
+                 cache_write_1h = ?4, cost_usd = ?5
+             WHERE source = 'codex' AND message_id = ?6 AND request_id = ?7
+               AND model = ?8 AND COALESCE(cache_write, 0) = 0
+               AND COALESCE(cache_write_5m, 0) = 0 AND COALESCE(cache_write_1h, 0) = 0
+               AND input_tokens = ?1 + ?2 AND cache_read = ?9 AND output_tokens = ?10",
+            params![
+                e.input_tokens, e.cache_write, e.cache_write_5m, e.cache_write_1h,
+                e.cost_usd, e.message_id, e.request_id, e.model, e.cache_read, e.output_tokens,
+            ],
+        )?;
+        if repaired > 0 {
+            tx.execute("DELETE FROM sync_state WHERE key = ?1", params![SYNC_WM_USAGE])?;
+            tx.execute(
+                "INSERT INTO sync_state (key, value) VALUES (?1, '1')
+                 ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1",
+                params![SYNC_RECALC_GEN],
+            )?;
+        }
+        tx.commit()?;
+    }
     Ok(())
 }
 

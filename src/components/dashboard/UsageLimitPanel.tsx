@@ -4,6 +4,7 @@ import { quotaSignalClass } from "@/components/ui/quotaSignal";
 import {
   formatRelativeTimeKo,
   formatResetKo,
+  isLimitObservationFresh,
   usedPct,
   windowLabel,
 } from "@/lib/limits";
@@ -52,7 +53,14 @@ export function CodexLimits({
   const rows = snapshots.flatMap((snapshot) =>
     [snapshot.primary, snapshot.secondary].flatMap((window, index) =>
       window
-        ? [{ key: `${snapshot.limit_id}:${index}`, label: limitLabel(snapshot, window), window }]
+        ? [
+            {
+              key: `${snapshot.limit_id}:${index}`,
+              label: limitLabel(snapshot, window),
+              window,
+              observedAt: snapshot.observed_at,
+            },
+          ]
         : []
     )
   );
@@ -65,7 +73,7 @@ export function CodexLimits({
     <div className="h-full pr-1">
       {rows.map((row) => {
         const resetMs = row.window.resets_at * 1000;
-        const fresh = resetMs > nowMs;
+        const fresh = isLimitObservationFresh(row.observedAt, nowMs) && resetMs > nowMs;
         return (
           <LimitRow
             key={row.key}

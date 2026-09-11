@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { pickQuotaSignal } from "@/components/ui/quotaSignal";
 import {
   formatResetKo,
+  isAccountWindowFresh,
+  isLimitObservationFresh,
   minRemaining,
   remainingPct,
   sortByRemainingDesc,
@@ -10,11 +12,73 @@ import {
   windowOfKind,
   windowShortLabel,
 } from "@/lib/limits";
-import type { LimitWindow } from "@/types/models";
+import type { AccountLimitRow, LimitWindow } from "@/types/models";
 
 function w(kind: string, utilization: number, scope_model: string | null = null): LimitWindow {
   return { kind, scope_model, utilization, resets_at: "2026-07-20T08:00:00+00:00" };
 }
+
+describe("한도 관측 시각", () => {
+  const nowMs = Date.parse("2026-07-19T08:00:00Z");
+  const row: AccountLimitRow = {
+    provider: "codex",
+    account_id: "account",
+    account_email: "user@example.com",
+    owner_email: "user@example.com",
+    owner_name: null,
+    plan_type: null,
+    windows: [],
+    fetched_at: new Date(nowMs).toISOString(),
+    updated_at: new Date(nowMs).toISOString(),
+  };
+
+  it("30분 경계, 잘못된 시각, 미래 5분 초과를 판정한다", () => {
+    expect(isLimitObservationFresh(nowMs - 30 * 60_000, nowMs)).toBe(true);
+    expect(isLimitObservationFresh(nowMs - 30 * 60_000 - 1, nowMs)).toBe(false);
+    expect(isLimitObservationFresh(Number.NaN, nowMs)).toBe(false);
+    expect(isLimitObservationFresh(nowMs + 5 * 60_000 + 1, nowMs)).toBe(false);
+  });
+
+  it("새 계정 갱신 시각이 오래된 모델 관측을 새것으로 만들지 않는다", () => {
+    const old = { ...w("weekly_scoped", 5), observed_at: nowMs - 31 * 60_000 };
+    const recent = { ...w("weekly_scoped", 70), observed_at: nowMs };
+    expect(isAccountWindowFresh(row, old, nowMs)).toBe(false);
+    expect(isAccountWindowFresh(row, recent, nowMs)).toBe(true);
+    expect(isAccountWindowFresh(row, w("weekly_all", 5), nowMs)).toBe(false);
+    const rows = [
+      { ...row, account_id: "old", windows: [old] },
+      { ...row, account_id: "recent", windows: [recent] },
+    ];
+    expect(
+      sortByRemainingDesc(
+        rows,
+        (r) => r.windows.filter((window) => isAccountWindowFresh(r, window, nowMs)),
+        "weekly_scoped"
+      ).map((r) => r.account_id)
+    ).toEqual(["recent", "old"]);
+  });
+
+  it("리셋된 창과 오래된 실제 fetch를 새 업로드 시각으로 표시하지 않는다", () => {
+    expect(
+      isAccountWindowFresh(
+        row,
+        {
+          ...w("session", 70),
+          observed_at: nowMs,
+          resets_at: new Date(nowMs).toISOString(),
+        },
+        nowMs
+      )
+    ).toBe(false);
+    expect(
+      isAccountWindowFresh(
+        { ...row, provider: "claude", fetched_at: new Date(nowMs - 31 * 60_000).toISOString() },
+        w("weekly_all", 5),
+        nowMs
+      )
+    ).toBe(false);
+  });
+});
 
 describe("pickQuotaSignal (사용률 기준)", () => {
   it("사용률 <40% 초록 / 40~70% 주황 / ≥70% 빨강", () => {

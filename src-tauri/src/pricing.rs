@@ -16,8 +16,7 @@ pub struct ModelPrice {
     #[serde(default)]
     long_context: Option<LongContextPrice>,
     /// cache read 단가 = input × 배율. 생략 시 Anthropic 표준 0.1.
-    /// Fable 5.1 / Mythos 5.1 만 0.025 ($0.25/MTok) — 공식 pricing 문서 각주 1
-    /// (pricing.json 의 해당 키에 명시).
+    /// 모델별 예외(Fable/Mythos 5.1, OpenAI 구형 모델)는 pricing.json에 명시.
     #[serde(default)]
     cache_read_multiplier: Option<f64>,
 }
@@ -117,8 +116,8 @@ pub fn calc_cost_usd(
             .unwrap_or((p.input_usd_per_mtok, p.output_usd_per_mtok));
         let input_cost = (input_tokens as f64 / 1_000_000.0) * input_rate;
         let output_cost = (output_tokens as f64 / 1_000_000.0) * output_rate;
-        // Anthropic 공식: cache_read = input * 0.1 (Fable 5.1 은 0.025 — 단가표 배율),
-        // cache_write_5m = input * 1.25, cache_write_1h = input * 2.0
+        // 캐시 읽기는 모델별 배율. Anthropic 5m / OpenAI cache write는 input * 1.25,
+        // Anthropic 1h cache write는 input * 2.0이다.
         let cache_read_rate =
             input_rate * p.cache_read_multiplier.unwrap_or(DEFAULT_CACHE_READ_MULTIPLIER);
         let cache_read_cost = (cache_read as f64 / 1_000_000.0) * cache_read_rate;
@@ -241,19 +240,89 @@ mod tests {
 
     #[test]
     fn test_calc_cost_gpt_5_6_tiers() {
-        let sol = calc_cost_usd("gpt-5.6-sol", 1_000_000, 1_000_000, 0, 0, 0);
-        let terra = calc_cost_usd("gpt-5.6-terra", 1_000_000, 1_000_000, 0, 0, 0);
-        let luna = calc_cost_usd("gpt-5.6-luna", 1_000_000, 1_000_000, 0, 0, 0);
-
-        assert!((sol - 35.0).abs() < 0.001, "sol cost={sol}");
-        assert!((terra - 17.5).abs() < 0.001, "terra cost={terra}");
-        assert!((luna - 7.0).abs() < 0.001, "luna cost={luna}");
+        // https://developers.openai.com/api/docs/pricing — Standard, short context.
+        for (model, expected) in [
+            ("gpt-5.6-sol", 2.4),
+            ("gpt-5.6", 2.4),
+            ("gpt-5.6-terra", 1.4),
+            ("gpt-5.6-luna", 0.14),
+        ] {
+            let cost = calc_cost_usd(model, 100_000, 100_000, 0, 0, 0);
+            assert!((cost - expected).abs() < 1e-9, "{model} cost={cost}");
+        }
     }
 
     #[test]
     fn test_calc_cost_gpt_5_6_cache_read_discount() {
-        let cost = calc_cost_usd("gpt-5.6-sol", 0, 0, 1_000_000, 0, 0);
-        assert!((cost - 0.5).abs() < 0.001, "cost={cost}");
+        for (model, expected) in [
+            ("gpt-5.6-sol", 0.04),
+            ("gpt-5.6-terra", 0.02),
+            ("gpt-5.6-luna", 0.002),
+        ] {
+            let cost = calc_cost_usd(model, 0, 0, 100_000, 0, 0);
+            assert!((cost - expected).abs() < 1e-9, "{model} cost={cost}");
+        }
+    }
+
+    #[test]
+    fn test_openai_long_context_boundary() {
+        // 입력 272K에서는 기본 요율, 272K+1에서는 요청 전체에 긴 입력 요율 적용.
+        for (model, at_expected, above_expected) in [
+            ("gpt-5.6-sol", 1.108, 2.206008),
+            ("gpt-5.6", 1.108, 2.206008),
+            ("gpt-5.6-terra", 0.556, 1.106004),
+            ("gpt-5.6-luna", 0.0556, 0.1106004),
+            ("gpt-5.5", 1.39, 2.76501),
+            ("gpt-5.5-pro", 8.34, 16.59006),
+            ("gpt-5.4", 0.695, 1.382505),
+            ("gpt-5.4-pro", 8.34, 16.59006),
+        ] {
+            let at = calc_cost_usd(model, 272_000, 1_000, 0, 0, 0);
+            let above = calc_cost_usd(model, 272_001, 1_000, 0, 0, 0);
+            assert!((at - at_expected).abs() < 1e-9, "{model} at={at}");
+            assert!(
+                (above - above_expected).abs() < 1e-9,
+                "{model} above={above}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_openai_long_context_counts_cache_reads_and_writes() {
+        // 172K fresh + 50K read + 50K write = 272K; 1 extra write crosses the threshold.
+        let at = calc_cost_usd("gpt-5.6-sol", 172_000, 1_000, 50_000, 50_000, 0);
+        let above = calc_cost_usd("gpt-5.6-sol", 172_000, 1_000, 50_000, 50_001, 0);
+        assert!((at - 0.978).abs() < 1e-9, "at={at}");
+        assert!((above - 1.94601).abs() < 1e-9, "above={above}");
+    }
+
+    #[test]
+    fn test_openai_mini_nano_do_not_inherit_long_context_tier() {
+        for (model, expected) in [("gpt-5.4-mini", 1.2), ("gpt-5.4-nano", 0.325)] {
+            let cost = calc_cost_usd(model, 1_000_000, 100_000, 0, 0, 0);
+            assert!((cost - expected).abs() < 1e-9, "{model} cost={cost}");
+        }
+    }
+
+    #[test]
+    fn test_openai_legacy_input_output_and_cached_rates() {
+        // 100K input + 100K cached + 10K output; Standard table / legacy model pages.
+        for (model, expected) in [
+            ("gpt-4.1", 0.33),
+            ("gpt-4.1-mini", 0.066),
+            ("gpt-4o", 0.475),
+            ("gpt-4o-mini", 0.0285),
+            ("o3", 0.33),
+            ("o4-mini", 0.1815),
+            ("o3-mini", 0.209),
+            ("o1", 2.85),
+            ("o1-mini", 0.209),
+            ("gpt-5.2-codex", 0.3325),
+            ("codex-mini-latest", 0.2475),
+        ] {
+            let cost = calc_cost_usd(model, 100_000, 10_000, 100_000, 0, 0);
+            assert!((cost - expected).abs() < 1e-9, "{model} cost={cost}");
+        }
     }
 
     #[test]

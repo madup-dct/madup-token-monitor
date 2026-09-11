@@ -1,6 +1,24 @@
 // Claude 한도 표시 공통 로직 — 잔여 %(배터리) 변환, 라벨, 리셋 포맷, 정렬.
 // UsageLimitPanel(대시보드) 과 AccountLimits(계정 한도 페이지) 가 공유한다.
-import type { LimitWindow } from "@/types/models";
+import type { AccountLimitRow, LimitWindow } from "@/types/models";
+
+export function isLimitObservationFresh(observedMs: number, nowMs: number): boolean {
+  const ageMs = nowMs - observedMs;
+  return Number.isFinite(ageMs) && ageMs >= -5 * 60_000 && ageMs <= 30 * 60_000;
+}
+
+export function isAccountWindowFresh(
+  row: AccountLimitRow,
+  window: LimitWindow,
+  nowMs: number
+): boolean {
+  // 이전 Codex 업로드에는 모델별 시각이 없으므로 새 관측을 기다린다.
+  const observedMs =
+    row.provider === "codex"
+      ? (window.observed_at ?? Number.NaN)
+      : new Date(row.fetched_at).getTime();
+  return isLimitObservationFresh(observedMs, nowMs) && new Date(window.resets_at).getTime() > nowMs;
+}
 
 export function remainingPct(utilization: number): number {
   return Math.round(Math.min(100, Math.max(0, 100 - utilization)));

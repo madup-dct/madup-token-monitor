@@ -80,6 +80,7 @@ export interface LimitWindow {
   scope_model: string | null;
   utilization: number; // 사용률 % 0~100
   resets_at: string; // RFC3339
+  observed_at?: number; // Codex 모델별 관측 시각 (epoch milliseconds)
 }
 
 export type AccountLimitProvider = "claude" | "codex";

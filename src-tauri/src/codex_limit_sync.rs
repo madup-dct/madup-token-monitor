@@ -10,7 +10,7 @@ static SNAPSHOT_CACHE: Mutex<Option<SnapshotCache>> = Mutex::new(None);
 
 const SCAN_INTERVAL: Duration = Duration::from_secs(60);
 const FAILURE_COOLDOWN: Duration = Duration::from_secs(300);
-const MAX_OBSERVATION_AGE_MINUTES: i64 = 30;
+const MAX_OBSERVATION_AGE_MS: i64 = 30 * 60_000;
 
 struct SnapshotCache {
     account_id: String,
@@ -51,8 +51,8 @@ pub fn upload_if_fresh() {
     let Ok(fetched_at) = chrono::DateTime::parse_from_rfc3339(&upload.fetched_at) else {
         return;
     };
-    let observation_age = Utc::now().signed_duration_since(fetched_at).num_minutes();
-    if !(-5..=MAX_OBSERVATION_AGE_MINUTES).contains(&observation_age) {
+    let observation_age = Utc::now().signed_duration_since(fetched_at).num_milliseconds();
+    if !(-5 * 60_000..=MAX_OBSERVATION_AGE_MS).contains(&observation_age) {
         return;
     }
     if crate::codex_account::read_codex_account_from(codex_home).as_ref() != Some(&account) {

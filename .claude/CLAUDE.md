@@ -231,6 +231,11 @@ bash scripts/release.sh
   캐시 읽기 $1, 출력 $50. 요청 입력(캐시 포함)이 272K를 **초과**하면 전체 요청에
   입력·캐시 2배, 출력 1.5배를 적용한다. 세션 누적량이나 reasoning effort로 판정하지 않는다.
   이는 Standard API 환산 비용이며 Fast/Batch/Flex 및 구독 요금 계산은 포함하지 않는다.
+- 2026-09-11 공식 Standard 요율: GPT-5.6 Sol(`gpt-5.6` 별칭 포함) $4/$20,
+  Terra $2/$12, Luna $0.2/$1.2 per MTok (입력/출력). Sol 프로모션은 최소 2026-11-21까지.
+  GPT-5.6·5.5/pro·5.4/pro에도 272K 초과 요율을 적용한다. 캐시 읽기·쓰기를 모두
+  요청 입력에 포함해 임계값을 판정한다. 구형 OpenAI 모델의 캐시 배율은 단가표에 별도 명시.
+  기준: https://developers.openai.com/api/docs/pricing
 
 ### 6.9 Supabase RPC 날짜 경계는 `kst_today()` — `current_date`(UTC) 금지
 - 날짜 버킷(`usage_aggregates.date` 등)은 클라이언트가 KST 달력 날짜로 만들지만
@@ -247,11 +252,21 @@ bash scripts/release.sh
 - Codex 최신 rollout 은 `event_msg` 안의 `payload.type=token_count`와
   `payload.info.last_token_usage`를 사용한다. 누적 `total_token_usage`는 dedup identity로만
   사용하고, 실제 집계는 요청별 `last_token_usage`를 합산한다.
-- `input_tokens`에는 캐시 입력이 포함되므로 `input_tokens - cached_input_tokens`를 일반 입력으로
-  저장하고 캐시 입력은 `cache_read`로 분리한다. 음수·불일치 usage는 저장하지 않는다.
+- `input_tokens`에는 캐시 읽기·쓰기가 포함된다. 일반 입력은
+  `input_tokens - cached_input_tokens - cache_write_input_tokens`로 저장하고,
+  읽기는 `cache_read`, 쓰기는 `cache_write`로 분리한다. Codex는 TTL을 보고하지 않아
+  `cache_write_5m/1h`는 0으로 저장하며 계산 시 aggregate write에 1.25배 요율을 적용한다.
+  음수·캐시 합계 초과·총합 불일치 usage는 저장하지 않는다.
+- 기존 dedup identity는 유지한다. 기동 백그라운드 재파싱에서 원본이 남은 기존 Codex 행의
+  캐시 쓰기를 분리 보정한다. 행 ID·총토큰은 유지하고 보정과 usage 워터마크 삭제·세대 증가를
+  한 트랜잭션으로 처리한다. 원본 로그가 없으면 캐시 쓰기 분리는 복구할 수 없다.
 - fork된 subagent rollout에 복사된 부모 turn은 제외하고, child 자신의 turn부터만 집계한다.
 - GPT-5.6 Codex 모델(`gpt-5.6-sol/terra/luna`) 단가는 `src-tauri/pricing.json`에 공식 가격 기준으로
   등록한다. 새 모델 추가 시 `pricing.rs` 회귀 테스트도 함께 갱신한다.
+- Codex 한도는 모델별 `observed_at`(epoch ms)을 로컬·업로드 windows JSON에 보존한다.
+  30분 초과 관측 또는 리셋 지난 창은 갱신 대기이며 정렬·상태점에서도 제외한다.
+  예전 업로드에 관측시각이 없으면 새 관측을 기다린다. 계정 단위 최신 `fetched_at`으로
+  다른 모델의 오래된 한도를 새것으로 취급하지 않는다.
 
 ### 6.11 시크릿 커밋 방지 = GitHub 전용 (public repo, 로컬 강제 없음)
 - 두 겹 모두 GitHub 쪽에서 돈다 (개발자 로컬 설정 불필요). 가이드는 `docs/GITLEAKS.md`.

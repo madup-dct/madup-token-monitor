@@ -3,6 +3,32 @@
 버전별 패치 내역. 최신 버전이 위. README 의 "최근 패치" 섹션은 이 파일의 맨 위 항목만 요약한다.
 설치 파일은 [GitHub Releases](https://github.com/madup-dct/madup-token-monitor/releases) 참고.
 
+## v0.9.9 — 2026-09-11
+
+### 수정 사항
+
+- **Codex 비용 교정**: 2026-09-11 OpenAI 공식 Standard API 단가를 반영했습니다. 아래 단위는 100만 토큰당 달러(입력 / 출력)입니다.
+  - GPT-5.6 Sol: $5 / $30 → $4 / $20. `gpt-5.6` 별칭에도 같은 단가를 적용합니다. Sol 프로모션은 최소 2026-11-21까지입니다.
+  - GPT-5.6 Terra: $2.5 / $15 → $2 / $12.
+  - GPT-5.6 Luna: $1 / $6 → $0.2 / $1.2.
+  - GPT-5.2-Codex·o3·o1-mini 단가와 GPT-4.1·GPT-4o·o 계열·Codex Mini의 캐시 읽기 할인율을 교정했습니다.
+- **긴 입력 할증 반영**: GPT-5.6·5.5/Pro·5.4/Pro도 요청 입력이 캐시를 포함해 272K를 초과하면 입력·캐시 2배, 출력 1.5배 요율을 적용합니다.
+- **캐시 쓰기 비용 반영**: Codex의 `cache_write_input_tokens`를 일반 입력에서 분리하고 1.25배 요율로 계산합니다. 추론 토큰은 기존대로 출력에 포함하며 다시 더하지 않습니다.
+- **기존 기록 보정**: 단가 변경은 업데이트 후 첫 실행에서 저장된 기록에 소급됩니다. 캐시 쓰기 분리는 원본 로그가 남아 있는 보존기간 내 기록을 백그라운드에서 다시 읽어 복구합니다. 행 ID·토큰 총합은 유지하고 다음 동기화에 반영합니다.
+- **오래된 Codex 한도 표시 교정**: 모델별 마지막 관측 후 30분이 지났거나 리셋된 한도는 “갱신 대기”로 표시합니다. 다른 모델의 새 관측이 오래된 한도를 최신처럼 보이게 하지 않습니다. 예전 서버 기록에 모델별 관측시각이 없으면 새 관측을 기다립니다.
+
+### 계산 기준과 보정 범위
+
+- 표시 비용은 현재 Standard API 단가로 환산한 값이며 구독료·크레딧·Fast/Batch/Flex 요금은 포함하지 않습니다. 모델과 캐시·긴 입력 비중에 따라 교정 후 비용은 올라가거나 내려갈 수 있습니다.
+- 원본 로그가 사라진 기록은 캐시 쓰기를 분리 복구할 수 없습니다. 원격 시간별 집계 재업로드는 기존 정책대로 최근 30일이며, 그보다 오래된 시간별 비용은 이전 값이 남을 수 있습니다.
+- 단가 출처: [OpenAI 요금표](https://developers.openai.com/api/docs/pricing), [캐시 계산식](https://developers.openai.com/api/docs/guides/prompt-caching), [GPT-5.2-Codex](https://developers.openai.com/api/docs/models/gpt-5.2-codex), [o1-mini](https://developers.openai.com/api/docs/models/o1-mini), [Codex Mini](https://developers.openai.com/api/docs/models/codex-mini-latest).
+
+### 검증
+
+- Rust 85개·프론트엔드 59개 테스트 및 프론트엔드 빌드 통과.
+- 캐시 쓰기 분리의 총토큰 보존·272K 경계·재파싱 중복 방지·보정 실패 롤백·동기화 워터마크 처리를 검증했습니다.
+- 전체 lint는 기존 오류 138개·경고 2개로 실패합니다. clippy는 변경하지 않은 코드의 기존 경고 6개가 남아 있으며, 엄격 모드(`-D warnings`)는 실패합니다.
+
 ## v0.9.8 — 2026-09-10
 
 ### 수정 사항

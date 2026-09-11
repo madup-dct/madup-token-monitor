@@ -92,6 +92,11 @@ fn test_upload_when_standard_and_model_limits_normalizes_windows() {
     assert_eq!(upload.windows[1].kind, "weekly_all");
     assert_eq!(upload.windows[2].kind, "weekly_scoped");
     assert_eq!(upload.windows[2].scope_model.as_deref(), Some("Spark"));
+    assert_eq!(upload.windows[0].observed_at, snapshots[0].observed_at);
+    assert_eq!(upload.windows[1].observed_at, snapshots[0].observed_at);
+    assert_eq!(upload.windows[2].observed_at, snapshots[1].observed_at);
+    let json = serde_json::to_value(&upload).expect("serialize upload");
+    assert_eq!(json["windows"][0]["observed_at"], snapshots[0].observed_at);
     assert_eq!(upload.fetched_at, "2026-07-15T07:20:00+00:00");
 }
 

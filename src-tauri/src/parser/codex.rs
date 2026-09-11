@@ -93,7 +93,8 @@ fn parse_rollout_usage(
 ) -> Option<UsageEvent> {
     let usage = value.pointer("/payload/info/last_token_usage")?;
     let (input_with_cache, cache_read, output_tokens, _, _) = token_counts(usage)?;
-    let input_tokens = input_with_cache.checked_sub(cache_read)?;
+    let cache_write = cache_write_tokens(usage)?;
+    let input_tokens = input_with_cache.checked_sub(cache_read)?.checked_sub(cache_write)?;
     let request_id = usage_identity(value)?;
     if state.last_rollout_usage_identity.as_deref() == Some(request_id.as_str()) {
         return None;
@@ -105,7 +106,8 @@ fn parse_rollout_usage(
     let cost_usd = state
         .model
         .as_deref()
-        .map(|model| calc_cost_usd(model, input_tokens, output_tokens, cache_read, 0, 0));
+        // Codex 캐시 쓰기도 1.25x 요율. 5m 인자는 계산에만 재사용하고 TTL은 저장하지 않는다.
+        .map(|model| calc_cost_usd(model, input_tokens, output_tokens, cache_read, cache_write, 0));
     state.last_rollout_usage_identity = Some(request_id.clone());
 
     Some(UsageEvent {
@@ -116,7 +118,7 @@ fn parse_rollout_usage(
         input_tokens: Some(input_tokens),
         output_tokens: Some(output_tokens),
         cache_read: Some(cache_read),
-        cache_write: Some(0),
+        cache_write: Some(cache_write),
         cache_write_5m: Some(0),
         cache_write_1h: Some(0),
         cost_usd,
@@ -130,7 +132,15 @@ fn parse_rollout_usage(
 fn usage_identity(value: &Value) -> Option<String> {
     let usage = value.pointer("/payload/info/total_token_usage")?;
     let (input, cached, output, reasoning, total) = token_counts(usage)?;
+    // 기존 DB와 같은 키를 유지해야 재파싱 시 캐시 쓰기 보정이 중복 행을 만들지 않는다.
     Some(format!("{input}:{cached}:{output}:{reasoning}:{total}"))
+}
+
+fn cache_write_tokens(usage: &Value) -> Option<i64> {
+    match usage.get("cache_write_input_tokens") {
+        Some(value) => value.as_i64(),
+        None => Some(0),
+    }
 }
 
 fn token_counts(usage: &Value) -> Option<(i64, i64, i64, i64, i64)> {
@@ -145,12 +155,14 @@ fn token_counts(usage: &Value) -> Option<(i64, i64, i64, i64, i64)> {
         .and_then(Value::as_i64)
         .unwrap_or(0);
     let total = usage.get("total_tokens").and_then(Value::as_i64)?;
+    let cache_write = cache_write_tokens(usage)?;
     if input < 0
         || cached < 0
         || output < 0
         || reasoning < 0
         || total < 0
-        || cached > input
+        || cache_write < 0
+        || cached.checked_add(cache_write)? > input
         || reasoning > output
         || input.checked_add(output)? != total
     {
