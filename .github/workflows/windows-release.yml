@@ -170,3 +170,16 @@ jobs:
           gh release upload "$TAG" "$EXE" "$EXE.sig" --repo "$REPO" --clobber
           # 실패해도 macOS 클라이언트가 깨지지 않도록 latest.json 은 설치 파일 다음에 교체한다.
           gh release upload "$TAG" latest.json --repo "$REPO" --clobber
+
+      - name: Restore latest.json on failure
+        # --clobber 는 삭제 후 업로드라 그 사이에 실패하면 latest.json 이 사라져 macOS 업데이트 확인이 404 가 된다.
+        if: ${{ (failure() || cancelled()) && inputs.publish }}
+        working-directory: dist-windows
+        run: |
+          if gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | grep -qx latest.json; then
+            echo "latest.json 유지됨"
+          else
+            mkdir -p restore
+            cp latest.orig.json restore/latest.json
+            gh release upload "$TAG" restore/latest.json --repo "$REPO"
+          fi
