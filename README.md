@@ -103,7 +103,7 @@ pnpm tauri build
 
 ### 릴리즈 (로컬)
 
-GitHub Actions(macOS 러너) 비용 문제로 CI 빌드는 폐지했습니다. 릴리즈는 전부 로컬에서 수행합니다.
+GitHub Actions(macOS 러너) 비용 문제로 macOS CI 빌드는 폐지했습니다. macOS 릴리즈는 로컬에서 수행하고, Windows 설치 파일만 Actions 에서 만듭니다(public repo 라 과금 없음).
 
 ```bash
 # 1) package.json + src-tauri/tauri.conf.json 의 version 을 동일하게 bump 후 commit
@@ -115,7 +115,7 @@ gh release edit v0.7.0 --draft=false
 ```
 
 - **서명 키**: `release.sh` 는 `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 환경변수가 있으면 그대로 쓰고, 없으면 **AWS SSM Parameter Store**(dct-madup, ap-northeast-2)에서 자동으로 가져옵니다. AWS 권한만 있으면 키 파일·비밀번호 없이 릴리즈할 수 있습니다. 셋업 상세는 [`docs/AUTO_UPDATE_SETUP.md`](docs/AUTO_UPDATE_SETUP.md) 참고.
-- Windows(nsis) 는 macOS 에서 빌드 불가 → 현재 로컬 릴리즈 배포는 macOS 2종(arm64/x86_64)만 포함합니다.
+- Windows(nsis) 는 macOS 에서 빌드되지 않아 `windows-release` 워크플로로 만듭니다. macOS 릴리즈가 올라간 뒤 `gh workflow run windows-release.yml -f tag=v<버전> -f publish=true` 를 실행하면 exe, sig 를 릴리즈에 올리고 `latest.json` 에 Windows 항목을 추가합니다. 상세는 [`docs/AUTO_UPDATE_SETUP.md`](docs/AUTO_UPDATE_SETUP.md) 참고.
 
 ### Supabase 마이그레이션
 

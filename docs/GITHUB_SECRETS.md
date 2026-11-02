@@ -1,10 +1,10 @@
 # GitHub Repository Secrets
 
-> ⚠️ **CI 빌드 폐지됨** (macOS 러너 비용 폭주). `build.yml`/`release.yml` 삭제, 릴리즈는
-> `scripts/release.sh` 로컬 전환. 현재 이 secrets 는 **불필요** — 로컬 `.env` + 서명 키 env 로 대체.
-> 아래는 CI 를 다시 도입할 경우를 위한 참고 기록.
+> macOS CI 빌드는 폐지됐다 (macOS 러너 비용 폭주). `build.yml`/`release.yml` 삭제, macOS 릴리즈는
+> `scripts/release.sh` 로컬 수행이라 로컬 `.env` + 서명 키 env 를 쓴다.
+> 아래 secrets 는 Windows 설치 파일을 만드는 `.github/workflows/windows-release.yml` 이 사용한다.
 
-(과거) 이 앱의 CI 빌드 (`.github/workflows/build.yml`, `release.yml`) 가 사용하던 secrets.
+(과거에는 `.github/workflows/build.yml`, `release.yml` 도 같은 secrets 를 사용했다.)
 
 `Settings → Secrets and variables → Actions → Repository secrets` 에 등록.
 

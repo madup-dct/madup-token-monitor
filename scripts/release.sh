@@ -2,7 +2,8 @@
 # 로컬 릴리즈 — macOS(aarch64 + x86_64) 빌드·서명 + latest.json 생성 + GitHub Release 업로드.
 #
 # 기존 .github/workflows/release.yml (tauri-action) 을 대체. CI macOS 러너 비용을 없애려고
-# 모든 빌드를 로컬에서 수행한다. Windows(nsis) 는 macOS 에서 빌드 불가 → 배포에서 제외.
+# macOS 빌드를 로컬에서 수행한다. Windows(nsis) 는 macOS 에서 빌드되지 않아
+# .github/workflows/windows-release.yml 이 같은 릴리즈에 별도로 붙인다.
 #
 # 사용:
 #   1) package.json + src-tauri/tauri.conf.json 의 version 을 동일하게 bump + commit
