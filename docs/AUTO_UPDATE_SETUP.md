@@ -11,7 +11,10 @@ version bump + commit → bash scripts/release.sh
 앱 실행 → updater plugin이 endpoint 의 latest.json 조회
   → 새 버전이면 다운로드 + 서명 검증 후 자동 업데이트
 ```
-> Windows(nsis) 는 macOS 에서 빌드 불가 → 현재 배포는 macOS 2종(arm64/x86_64) 만.
+> Windows(nsis) 는 macOS 에서 빌드되지 않아 `windows-release` 워크플로로 별도 처리한다.
+> `gh workflow run windows-release.yml -f tag=v0.x.y -f publish=false` 로 빌드, 서명 검증, latest.json 패치를 확인한 뒤
+> `publish=true` 로 다시 실행하면 exe, sig 업로드 후 latest.json 에 `windows-x86_64`, `windows-x86_64-nsis` 항목이 추가된다.
+> macOS 항목이 원본과 다르면 업로드 전에 실패한다.
 
 ---
 

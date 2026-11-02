@@ -1,0 +1,172 @@
+name: windows-release
+
+# Windows(nsis) 설치 파일만 만들어 기존 릴리즈에 붙인다. macOS 는 scripts/release.sh 가 맡는다.
+# public repo 라 windows-latest 러너 실행은 과금되지 않는다 (CI 를 폐지한 원인은 macOS 러너 비용).
+#
+# 사용:
+#   1) publish=false 로 실행 → 빌드 + 서명 검증 + latest.json 패치 결과 확인까지만 수행
+#   2) 문제 없으면 publish=true 로 다시 실행 → exe/sig 업로드 후 latest.json 교체
+#
+#   gh workflow run windows-release.yml -f tag=v0.9.9 -f publish=false
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 대상 릴리즈 태그 (예 v0.9.9)
+        required: true
+        type: string
+      publish:
+        description: 릴리즈에 업로드하고 latest.json 교체
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  REPO: ${{ github.repository }}
+  TAG: ${{ inputs.tag }}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Validate tag format
+        shell: bash
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::잘못된 태그: $TAG"; exit 1; }
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Check version matches tag
+        shell: bash
+        run: |
+          [ "v$(node -p "require('./package.json').version")" = "$TAG" ] || { echo "::error::package.json 버전 불일치"; exit 1; }
+          [ "v$(node -p "require('./src-tauri/tauri.conf.json').version")" = "$TAG" ] || { echo "::error::tauri.conf.json 버전 불일치"; exit 1; }
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        # pnpm 11+ 가 CI 모드에서 ignored build scripts 를 치명적 에러로 처리해 명시적으로 허용.
+        run: pnpm install --frozen-lockfile --dangerously-allow-all-builds
+
+      - name: Write .env (vite inline)
+        # shell: bash — windows-latest 기본 셸(PowerShell) 에서 POSIX 문법이 깨지는 것을 방지.
+        env:
+          URL: ${{ secrets.VITE_SUPABASE_URL }}
+          KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+          SUCCESS_URL: ${{ secrets.VITE_AUTH_SUCCESS_URL }}
+        shell: bash
+        run: |
+          if [ -z "$URL" ] || [ -z "$KEY" ] || [ -z "$SUCCESS_URL" ]; then
+            echo "::error::VITE_* secret 누락"
+            exit 1
+          fi
+          # Secret 이 현재 Supabase 와 어긋나면 앱이 "Invalid API key" 무한 로딩에 빠진다 (CLAUDE.md 6.2).
+          code="$(curl -s -o /dev/null -w '%{http_code}' -H "apikey: $KEY" "$URL/auth/v1/settings")"
+          echo "supabase settings status: $code"
+          [ "$code" = "200" ] || { echo "::error::Supabase 키 검증 실패"; exit 1; }
+          {
+            echo "VITE_SUPABASE_URL=$URL"
+            echo "VITE_SUPABASE_PUBLISHABLE_KEY=$KEY"
+            echo "VITE_AUTH_SUCCESS_URL=$SUCCESS_URL"
+          } > .env
+
+      - name: Build NSIS installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis
+
+      - name: Check Supabase URL is inlined
+        shell: bash
+        run: grep -q 'supabase\.co' dist/assets/index-*.js
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sig
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    # build job 은 서드파티 패키지를 실행하므로 쓰기 권한을 이 job 에만 준다.
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: dist-windows
+
+      - name: Verify updater signature
+        working-directory: dist-windows
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          EXE="madup-token-monitor_${TAG#v}_x64-setup.exe"
+          test -s "$EXE" && test -s "$EXE.sig"
+          jq -r '.plugins.updater.pubkey' ../src-tauri/tauri.conf.json | base64 -d > "$RUNNER_TEMP/updater.pub"
+          base64 -d "$EXE.sig" > "$RUNNER_TEMP/updater.minisig"
+          minisign -Vm "$EXE" -p "$RUNNER_TEMP/updater.pub" -x "$RUNNER_TEMP/updater.minisig"
+          sha256sum "$EXE"
+
+      - name: Patch latest.json
+        working-directory: dist-windows
+        run: |
+          EXE="madup-token-monitor_${TAG#v}_x64-setup.exe"
+          URL="https://github.com/$REPO/releases/download/$TAG/$EXE"
+          gh release download "$TAG" --repo "$REPO" --pattern latest.json --output latest.orig.json
+          jq -e --arg v "${TAG#v}" '.version == $v' latest.orig.json
+          jq --arg sig "$(cat "$EXE.sig")" --arg url "$URL" '
+            .platforms["windows-x86_64"] = {signature: $sig, url: $url}
+            | .platforms["windows-x86_64-nsis"] = {signature: $sig, url: $url}
+          ' latest.orig.json > latest.json
+          # Windows 키를 뺀 나머지가 원본과 같아야 한다. macOS 업데이트 경로 보호용.
+          jq -e --slurpfile orig latest.orig.json '
+            del(.platforms["windows-x86_64"], .platforms["windows-x86_64-nsis"])
+            == ($orig[0] | del(.platforms["windows-x86_64"], .platforms["windows-x86_64-nsis"]))
+          ' latest.json
+          jq -c '{version, platforms: (.platforms | keys)}' latest.json
+
+      - name: Upload to release
+        if: ${{ inputs.publish }}
+        working-directory: dist-windows
+        run: |
+          EXE="madup-token-monitor_${TAG#v}_x64-setup.exe"
+          gh release upload "$TAG" "$EXE" "$EXE.sig" --repo "$REPO" --clobber
+          # 실패해도 macOS 클라이언트가 깨지지 않도록 latest.json 은 설치 파일 다음에 교체한다.
+          gh release upload "$TAG" latest.json --repo "$REPO" --clobber

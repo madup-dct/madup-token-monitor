@@ -138,8 +138,9 @@ bash scripts/release.sh
 #    기존 설치 사용자의 자동 업데이트 활성화
 ```
 
-> Windows(nsis) 는 macOS 에서 빌드 불가 → 현재 배포는 macOS 2종만. Windows 배포가 다시 필요하면
-> Windows 머신에서 별도 빌드하거나 CI 를 부분 복구해야 한다.
+> Windows(nsis) 는 macOS 에서 빌드되지 않아 `.github/workflows/windows-release.yml` 로 만든다(수동 실행, Windows 전용).
+> Draft Release 가 올라간 뒤 `publish=false` 로 빌드, 서명 검증, latest.json 패치를 확인하고 `publish=true` 로 exe, sig 업로드와
+> latest.json 교체를 한다. public repo 라 과금되지 않는다. 쓰는 Secret 5종은 docs/GITHUB_SECRETS.md 참고.
 
 ## 6. 알려진 함정 (이미 학습한 것)
 
