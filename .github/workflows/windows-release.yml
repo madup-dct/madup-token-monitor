@@ -114,9 +114,35 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  smoke:
+    # 자동 업데이트로 내려가기 전에 설치와 실행이 되는지 확인한다. 로그인과 화면은 검증하지 않는다.
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: dist-windows
+
+      - name: Install silently and launch
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem dist-windows -Filter *-setup.exe | Select-Object -First 1
+          Start-Process $installer.FullName -ArgumentList '/S' -Wait
+          $bin = Get-ChildItem "$env:LOCALAPPDATA\madup-token-monitor" -Filter *.exe |
+            Where-Object Name -notmatch 'uninstall' | Select-Object -First 1
+          if (-not $bin) { throw '설치된 실행 파일을 찾지 못함' }
+          Write-Host "installed: $($bin.FullName)"
+          $app = Start-Process $bin.FullName -PassThru
+          Start-Sleep -Seconds 30
+          if ($app.HasExited) { throw "실행 직후 종료됨, exit code $($app.ExitCode)" }
+          Write-Host "running after 30s: pid $($app.Id)"
+          Stop-Process -Id $app.Id -Force
+
   publish:
     # build job 은 서드파티 패키지를 실행하므로 쓰기 권한을 이 job 에만 준다.
-    needs: build
+    needs: smoke
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
