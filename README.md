@@ -18,6 +18,7 @@
 - GPT-5.6 Sol/Terra/Luna 및 구형 OpenAI 모델의 비용을 공식 Standard API 단가로 교정.
 - 긴 입력 할증과 Codex 캐시 쓰기 비용 반영. 기존 기록은 단가 재계산·원본 로그 재파싱으로 보정하며 토큰 총합은 유지.
 - 모델별 관측 후 30분이 지난 Codex 한도는 “갱신 대기”로 표시.
+- 2026-11-02 Windows x64 설치 파일 추가(BETA, 실기기 로그인 미검증).
 
 전체 이력은 [`docs/RELEASE_NOTES.md`](docs/RELEASE_NOTES.md) 참고.
 
