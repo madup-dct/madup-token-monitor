@@ -1,0 +1,142 @@
+name: macos-release
+
+# macOS(aarch64 + x86_64) 빌드를 GitHub Actions 에서 돌려 Draft Release 를 만든다.
+# scripts/release.sh 를 그대로 쓰며, 로컬에 .env 와 서명 키가 없는 사람도 저장소 Secret 으로 릴리즈할 수 있다.
+# 수동 실행 전용. public repo 라 GitHub 호스팅 표준 러너는 과금되지 않는다.
+# Draft 만 만든다. 확인 후 `gh release edit <tag> --draft=false` 로 발행하고, Windows 는 windows-release.yml.
+#
+#   gh workflow run macos-release.yml -f tag=v0.9.10
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 대상 태그 (예 v0.9.10). 태그를 먼저 push 해 둔다.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  REPO: ${{ github.repository }}
+  TAG: ${{ inputs.tag }}
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Validate tag format
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::잘못된 태그: $TAG"; exit 1; }
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        # pnpm 11+ 가 CI 모드에서 ignored build scripts 를 치명적 에러로 처리해 명시적으로 허용.
+        run: pnpm install --frozen-lockfile --dangerously-allow-all-builds
+
+      - name: Write .env (vite inline)
+        env:
+          URL: ${{ secrets.VITE_SUPABASE_URL }}
+          KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+          SUCCESS_URL: ${{ secrets.VITE_AUTH_SUCCESS_URL }}
+        run: |
+          if [ -z "$URL" ] || [ -z "$KEY" ] || [ -z "$SUCCESS_URL" ]; then
+            echo "::error::VITE_* secret 누락"
+            exit 1
+          fi
+          # Secret 이 현재 Supabase 와 어긋나면 앱이 "Invalid API key" 무한 로딩에 빠진다 (CLAUDE.md 6.2).
+          code="$(curl -s -o /dev/null -w '%{http_code}' -H "apikey: $KEY" "$URL/auth/v1/settings")"
+          echo "supabase settings status: $code"
+          [ "$code" = "200" ] || { echo "::error::Supabase 키 검증 실패"; exit 1; }
+          {
+            echo "VITE_SUPABASE_URL=$URL"
+            echo "VITE_SUPABASE_PUBLISHABLE_KEY=$KEY"
+            echo "VITE_AUTH_SUCCESS_URL=$SUCCESS_URL"
+          } > .env
+
+      - name: Build and stage (scripts/release.sh, no upload)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RELEASE_SKIP_UPLOAD: "1"
+          RELEASE_STAGE_DIR: ${{ runner.temp }}/stage
+        run: |
+          [ "v$(node -p "require('./package.json').version")" = "$TAG" ] || { echo "::error::package.json 버전이 태그와 다름"; exit 1; }
+          bash scripts/release.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: ${{ runner.temp }}/stage/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    # build job 은 서드파티 패키지를 실행하므로 쓰기 권한을 이 job 에만 준다.
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-release
+          path: stage
+
+      - name: Verify updater signatures and latest.json
+        working-directory: stage
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          jq -r '.plugins.updater.pubkey' ../src-tauri/tauri.conf.json | base64 -d > "$RUNNER_TEMP/updater.pub"
+          for arch in aarch64 x86_64; do
+            TAR="madup-token-monitor_${TAG#v}_${arch}.app.tar.gz"
+            test -s "$TAR" && test -s "$TAR.sig"
+            base64 -d "$TAR.sig" > "$RUNNER_TEMP/$arch.minisig"
+            minisign -Vm "$TAR" -p "$RUNNER_TEMP/updater.pub" -x "$RUNNER_TEMP/$arch.minisig"
+          done
+          jq -e --arg v "${TAG#v}" '.version == $v and (.platforms | has("darwin-aarch64") and has("darwin-x86_64"))' latest.json
+          ls -la
+
+      - name: Create draft release
+        run: |
+          # 릴리즈 본문은 docs/RELEASE_NOTES.md 의 해당 버전 항목을 그대로 쓴다 (CLAUDE.md §8).
+          awk -v h="## ${TAG}" '!on && (index($0, h " ")==1 || $0==h) {on=1; next} on && /^## v/ {exit} on' docs/RELEASE_NOTES.md > "$RUNNER_TEMP/notes.md"
+          test -s "$RUNNER_TEMP/notes.md" || { echo "::error::RELEASE_NOTES.md 에 ${TAG} 항목 없음"; exit 1; }
+          gh release create "$TAG" stage/* \
+            --repo "$REPO" \
+            --verify-tag \
+            --draft \
+            --title "매드업 토큰 모니터 ${TAG}" \
+            --notes-file "$RUNNER_TEMP/notes.md"

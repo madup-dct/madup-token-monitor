@@ -138,6 +138,10 @@ bash scripts/release.sh
 #    기존 설치 사용자의 자동 업데이트 활성화
 ```
 
+> 로컬에 `.env`나 서명 키가 없으면 `.github/workflows/macos-release.yml`(수동 실행)로 같은 `release.sh`를
+> Actions 에서 돌린다: 태그 push 후 `gh workflow run macos-release.yml -f tag=vX.Y.Z` → Draft 생성(본문은
+> RELEASE_NOTES 해당 항목) → 확인 후 `gh release edit vX.Y.Z --draft=false`. 빌드 job 은 읽기 권한,
+> 업로드 job 만 쓰기 권한. public repo 라 표준 러너는 과금되지 않는다(2026-11-13 추가, v0.9.10 첫 사용).
 > Windows(nsis) 는 macOS 에서 빌드되지 않아 `.github/workflows/windows-release.yml` 로 만든다(수동 실행, Windows 전용).
 > Draft Release 가 올라간 뒤 `publish=false` 로 빌드, 서명 검증, latest.json 패치를 확인하고 `publish=true` 로 exe, sig 업로드와
 > latest.json 교체를 한다. public repo 라 과금되지 않는다. 쓰는 Secret 5종은 docs/GITHUB_SECRETS.md 참고.
@@ -237,6 +241,10 @@ bash scripts/release.sh
   GPT-5.6·5.5/pro·5.4/pro에도 272K 초과 요율을 적용한다. 캐시 읽기·쓰기를 모두
   요청 입력에 포함해 임계값을 판정한다. 구형 OpenAI 모델의 캐시 배율은 단가표에 별도 명시.
   기준: https://developers.openai.com/api/docs/pricing
+- 2026-11-13: `gpt-6.1-sol`(Codex config 기본 모델이던 시기의 `codex exec` 실행분)과 `gpt-6-luna`가
+  키 누락으로 v0.9.9까지 $0 적재(한 기기 실측 5,053건, 입력 30.6M, 캐시 읽기 483M, 출력 4.5M).
+  v0.9.10에서 공식 단가 추가: Sol $2/캐시 $0.10/$10, Luna $0.10/$0.01/$0.50, 272K 초과 2배/1.5배.
+  `gpt-reserve`는 공식 페이지(404)가 없어 미등록. Codex config 모델을 바꾸면 이 표부터 확인할 것.
 
 ### 6.9 Supabase RPC 날짜 경계는 `kst_today()` — `current_date`(UTC) 금지
 - 날짜 버킷(`usage_aggregates.date` 등)은 클라이언트가 KST 달력 날짜로 만들지만

@@ -3,6 +3,17 @@
 버전별 패치 내역. 최신 버전이 위. README 의 "최근 패치" 섹션은 이 파일의 맨 위 항목만 요약한다.
 설치 파일은 [GitHub Releases](https://github.com/madup-dct/madup-token-monitor/releases) 참고.
 
+## v0.9.10 (2026-11-13)
+
+### 수정 사항
+
+- Codex 모델 `gpt-6.1-sol`과 `gpt-6-luna`가 단가표에 없어 비용이 $0으로 집계되던 문제를 수정했습니다. `codex exec`로 실행한 Codex 사용량이 주로 해당됩니다.
+  - `gpt-6.1-sol`: 1M 토큰당 입력 $2, 캐시 읽기 $0.10, 출력 $10. 요청 입력이 272K를 넘으면 입력과 캐시 2배, 출력 1.5배 ([공식](https://developers.openai.com/api/docs/models/gpt-6.1-sol)).
+  - `gpt-6-luna`: 1M 토큰당 입력 $0.10, 캐시 읽기 $0.01, 출력 $0.50. 긴 입력 할증 규칙은 위와 같습니다 ([공식](https://developers.openai.com/api/docs/models/gpt-6-luna)).
+- 업데이트 후 첫 실행 때 보존 기간(이번 달과 직전 2개월) 안의 기록 비용이 새 단가표로 다시 계산되고, 이어서 사내 집계로 다시 업로드됩니다. 원격 시간별 집계는 최근 30일만 다시 올라가므로 그보다 오래된 시간별 행에는 이전 비용이 남습니다. 일자별 집계는 전부 갱신됩니다.
+- `gpt-reserve`는 공식 단가 페이지가 없어 이번에도 $0으로 남습니다.
+- 금액은 Standard API 단가로 환산한 값이며 ChatGPT 구독 요금과는 다릅니다.
+
 ## v0.9.9 — 2026-09-11
 
 ### Windows 설치 파일 추가 (2026-11-02)

@@ -47,8 +47,13 @@ fi
 # --- 사전 점검 -------------------------------------------------------------
 : "${TAURI_SIGNING_PRIVATE_KEY:?개인키를 얻지 못함 (env export 또는 SSM ${SSM_KEY_PARAM} 확인)}"
 : "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:?비밀번호를 얻지 못함 (env export 또는 SSM ${SSM_PW_PARAM} 확인)}"
-command -v gh >/dev/null  || { echo "::error:: gh CLI 필요"; exit 1; }
-gh auth status >/dev/null || { echo "::error:: gh 로그인 필요 (gh auth login)"; exit 1; }
+# CI(.github/workflows/macos-release.yml) 빌드 job 은 쓰기 토큰 없이 빌드만 하고, 업로드는
+# 별도 job 이 맡는다. 그때는 RELEASE_SKIP_UPLOAD=1 + RELEASE_STAGE_DIR 로 산출물만 남긴다.
+SKIP_UPLOAD="${RELEASE_SKIP_UPLOAD:-0}"
+if [ "$SKIP_UPLOAD" != "1" ]; then
+  command -v gh >/dev/null  || { echo "::error:: gh CLI 필요"; exit 1; }
+  gh auth status >/dev/null || { echo "::error:: gh 로그인 필요 (gh auth login)"; exit 1; }
+fi
 
 # .env 프론트 필수값 가드 — VITE_SUPABASE_URL 이 없으면 vite 가 빈 값으로 inline 해
 # 앱이 시작 즉시 supabase createClient 에서 크래시(빈 화면)한다 (v0.8.0 사고 재발 방지).
@@ -81,8 +86,13 @@ if ! grep -q 'supabase\.co' dist/assets/index-*.js 2>/dev/null; then
 fi
 
 # --- 아티팩트 수집 + latest.json 조립 --------------------------------------
-STAGE="$(mktemp -d)"
-trap 'rm -rf "$STAGE"' EXIT
+if [ -n "${RELEASE_STAGE_DIR:-}" ]; then
+  STAGE="$RELEASE_STAGE_DIR"
+  mkdir -p "$STAGE"
+else
+  STAGE="$(mktemp -d)"
+  trap 'rm -rf "$STAGE"' EXIT
+fi
 PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 PLATFORMS=""   # latest.json platforms 항목 (콤마로 구분 — trailing comma 안 생기게 prepend)
 PSEP=""        # 두 번째 항목부터 앞에 ",\n" 를 붙인다
@@ -127,6 +137,11 @@ EOF
 
 echo "▶ 업로드 파일:"
 ls -1 "$STAGE"
+
+if [ "$SKIP_UPLOAD" = "1" ]; then
+  echo "✓ 업로드 생략 (RELEASE_SKIP_UPLOAD=1): $STAGE"
+  exit 0
+fi
 
 # --- GitHub Release (Draft) ------------------------------------------------
 gh release create "$TAG" "$STAGE"/* \

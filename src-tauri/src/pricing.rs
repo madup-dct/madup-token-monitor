@@ -233,6 +233,19 @@ mod tests {
     }
 
     #[test]
+    fn test_calc_cost_gpt_6_1_sol_and_luna_standard_and_long_context() {
+        // https://developers.openai.com/api/docs/models/gpt-6.1-sol — $2 / cached $0.10 / $10.
+        // https://developers.openai.com/api/docs/models/gpt-6-luna — $0.10 / cached $0.01 / $0.50.
+        // 272K 초과 요청은 입력·캐시 2배, 출력 1.5배.
+        let sol = calc_cost_usd("gpt-6.1-sol", 60_000, 1_000, 40_000, 0, 0);
+        assert!((sol - 0.134).abs() < 1e-9, "sol={sol}");
+        let sol_long = calc_cost_usd("gpt-6.1-sol", 172_001, 1_000, 100_000, 0, 0);
+        assert!((sol_long - 0.723004).abs() < 1e-9, "sol_long={sol_long}");
+        let luna = calc_cost_usd("gpt-6-luna", 60_000, 1_000, 40_000, 0, 0);
+        assert!((luna - 0.0069).abs() < 1e-9, "luna={luna}");
+    }
+
+    #[test]
     fn test_calc_cost_gpt_6_astra_large_output_does_not_trigger_long_context() {
         let cost = calc_cost_usd("gpt-6-astra", 100_000, 200_000, 0, 0, 0);
         assert!((cost - 11.0).abs() < 1e-9, "cost={cost}");
