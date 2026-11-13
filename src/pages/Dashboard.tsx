@@ -287,7 +287,7 @@ export function Dashboard() {
   const { data: topTools } = useUserTools(user?.id ?? null, 7);
   const { data: deviceCount } = useMyDeviceCount(30);
   const { data: oauthResp } = useOAuthUsage();
-  const { data: codexLimits } = useCodexRateLimits();
+  const { data: codexLimits, isPending: codexLimitsPending } = useCodexRateLimits();
   const oauthUsage = oauthResp?.data ?? null;
   const oauthError = oauthResp?.error ?? null;
 
@@ -624,7 +624,7 @@ export function Dashboard() {
           ]}
           claudeUsage={oauthUsage}
           claudeError={oauthError}
-          codexLimits={codexLimits ?? []}
+          codexLimits={codexLimitsPending ? undefined : (codexLimits ?? [])}
           refreshing={refreshing}
           lastSyncLabel={formatRelativeShort(nowMs - lastSync.getTime())}
           nowMs={nowMs}

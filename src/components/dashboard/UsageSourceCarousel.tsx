@@ -18,7 +18,8 @@ interface UsageSourceCarouselProps {
   readonly combinedTotals: readonly PeriodUsageTotal[];
   readonly claudeUsage: OAuthUsage | null;
   readonly claudeError: string | null;
-  readonly codexLimits: readonly CodexRateLimitSnapshot[];
+  /** undefined = 첫 조회 중 (기록 없음과 구분) */
+  readonly codexLimits: readonly CodexRateLimitSnapshot[] | undefined;
   readonly refreshing: boolean;
   readonly lastSyncLabel: string;
   readonly nowMs: number;

@@ -128,10 +128,47 @@ fn test_account_scan_excludes_files_created_before_auth_boundary() {
     )
     .expect("timestamp fits i64");
 
-    let included = read_current_codex_rate_limits_from(&home, now_ms - 1_000);
-    let excluded = read_current_codex_rate_limits_from(&home, now_ms + 1_000);
+    let included = read_current_codex_rate_limits_from(&home, now_ms - 1_000, now_ms);
+    let excluded = read_current_codex_rate_limits_from(&home, now_ms + 1_000, now_ms);
     fs::remove_dir_all(&home).expect("remove fixture directory");
 
     assert_eq!(included.len(), 1);
     assert!(excluded.is_empty());
+}
+
+#[test]
+fn test_current_scan_skips_files_untouched_past_weekly_window() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_nanos();
+    let home = std::env::temp_dir().join(format!(
+        "codex-lookback-scan-{}-{nonce}",
+        std::process::id()
+    ));
+    let sessions = home.join("sessions");
+    fs::create_dir_all(&sessions).expect("create fixture directory");
+    let path = sessions.join("old.jsonl");
+    fs::write(&path, STANDARD).expect("write session");
+    let nine_days_ago = SystemTime::now() - std::time::Duration::from_secs(9 * 24 * 60 * 60);
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .and_then(|file| file.set_modified(nine_days_ago))
+        .expect("age fixture");
+    let now_ms = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_millis(),
+    )
+    .expect("timestamp fits i64");
+
+    // auth 경계는 통과하지만 8일 넘게 안 바뀐 파일은 주간 창도 지나 읽지 않는다.
+    let skipped = read_current_codex_rate_limits_from(&home, 0, now_ms);
+    let unbounded = read_codex_rate_limits(&sessions);
+    fs::remove_dir_all(&home).expect("remove fixture directory");
+
+    assert!(skipped.is_empty());
+    assert_eq!(unbounded.len(), 1);
 }

@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 const TAIL_BYTES: u64 = 2 * 1024 * 1024;
 
@@ -47,16 +48,23 @@ struct RawSnapshot {
     secondary: Option<RateLimitWindow>,
 }
 
+/// 주간 창(10080분)보다 오래 수정되지 않은 rollout 의 한도는 이미 리셋이 지나 표시할 값이 없다.
+/// 하루 여유를 둔 8일 이내 수정 파일만 읽는다 (2026-11 실측: 전체 1,373개 2.25GB tail 을 매번 읽어 8초).
+const LIMIT_SCAN_LOOKBACK_MS: i64 = 8 * 24 * 60 * 60 * 1000;
+
+/// 동기 command 는 메인 스레드에서 돌아 스캔 동안 팝오버가 멈추므로 blocking 풀에서 실행한다.
 #[tauri::command]
-pub fn get_codex_rate_limits() -> Result<Vec<CodexRateLimitSnapshot>, String> {
-    let home = codex_home();
-    let Some(account) = crate::codex_account::read_codex_account_from(home) else {
-        return Ok(Vec::new());
-    };
-    Ok(read_current_codex_rate_limits_from(
-        home,
-        account.auth_started_at_ms,
-    ))
+pub async fn get_codex_rate_limits() -> Result<Vec<CodexRateLimitSnapshot>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let home = codex_home();
+        let Some(account) = crate::codex_account::read_codex_account_from(home) else {
+            return Vec::new();
+        };
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        read_current_codex_rate_limits_from(home, account.auth_started_at_ms, now_ms)
+    })
+    .await
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -86,16 +94,58 @@ fn read_codex_rate_limits_since(
         )
     });
 
-    let snapshots = files
-        .iter()
-        .filter_map(|path| read_tail(path).ok())
-        .flat_map(|text| {
+    let mut cache = FILE_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut snapshots = Vec::new();
+    for path in files {
+        let Some(key) = file_cache_key(&path) else {
+            continue;
+        };
+        let fresh = match cache.get(&path) {
+            Some((cached_key, cached)) if *cached_key == key => Some(cached.clone()),
+            _ => None,
+        };
+        let file_snapshots = fresh.unwrap_or_else(|| {
+            let read = read_file_snapshots(&path);
+            cache.insert(path, (key, read.clone()));
+            read
+        });
+        snapshots.extend(file_snapshots);
+    }
+    // 화면 조회(8일 창)와 업로드(직전 스캔 이후)가 범위를 달리해 같은 캐시를 쓰므로 호출마다
+    // 갈아치우지 않고, 주간 창을 넘겨 다시 읽힐 일이 없는 파일만 버린다.
+    let cache_floor = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_millis(
+            (LIMIT_SCAN_LOOKBACK_MS + 24 * 60 * 60 * 1000) as u64,
+        ))
+        .unwrap_or(std::time::UNIX_EPOCH);
+    cache.retain(|_, ((modified, _), _)| *modified >= cache_floor);
+    select_latest_snapshots(snapshots)
+}
+
+/// (수정 시각, 크기) 가 같으면 rollout 은 append-only 라 내용도 같다고 본다.
+type FileCacheKey = (std::time::SystemTime, u64);
+
+/// 30초마다 반복되는 한도 조회가 바뀌지 않은 rollout 을 다시 읽지 않도록 파일별 결과를 보관한다.
+/// 크기는 최근 9일 안에 수정된 rollout 수로 제한된다.
+static FILE_CACHE: Mutex<BTreeMap<PathBuf, (FileCacheKey, Vec<CodexRateLimitSnapshot>)>> =
+    Mutex::new(BTreeMap::new());
+
+fn file_cache_key(path: &Path) -> Option<FileCacheKey> {
+    let metadata = fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
+
+fn read_file_snapshots(path: &Path) -> Vec<CodexRateLimitSnapshot> {
+    read_tail(path)
+        .map(|text| {
             text.lines()
                 .filter(|line| line.contains("\"rate_limits\""))
                 .filter_map(parse_snapshot)
-                .collect::<Vec<_>>()
-        });
-    select_latest_snapshots(snapshots)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn file_created_at_ms(path: &Path) -> Option<i64> {
@@ -119,8 +169,10 @@ pub(crate) use crate::codex_home::codex_home;
 fn read_current_codex_rate_limits_from(
     home: &Path,
     auth_started_at_ms: i64,
+    now_ms: i64,
 ) -> Vec<CodexRateLimitSnapshot> {
-    read_account_codex_rate_limits_from(home, auth_started_at_ms, auth_started_at_ms)
+    let modified_since = auth_started_at_ms.max(now_ms.saturating_sub(LIMIT_SCAN_LOOKBACK_MS));
+    read_account_codex_rate_limits_from(home, auth_started_at_ms, modified_since)
 }
 
 pub(crate) fn read_account_codex_rate_limits_from(

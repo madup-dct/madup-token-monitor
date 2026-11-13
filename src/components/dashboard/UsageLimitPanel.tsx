@@ -47,9 +47,17 @@ export function CodexLimits({
   snapshots,
   nowMs,
 }: {
-  readonly snapshots: readonly CodexRateLimitSnapshot[];
+  readonly snapshots: readonly CodexRateLimitSnapshot[] | undefined;
   readonly nowMs: number;
 }) {
+  if (snapshots === undefined) {
+    return (
+      <LimitEmpty
+        title="Codex 한도 불러오는 중"
+        detail="최근 Codex 기록에서 한도를 읽고 있습니다."
+      />
+    );
+  }
   const rows = snapshots.flatMap((snapshot) =>
     [snapshot.primary, snapshot.secondary].flatMap((window, index) =>
       window
