@@ -138,6 +138,10 @@ bash scripts/release.sh
 #    기존 설치 사용자의 자동 업데이트 활성화
 ```
 
+> 로컬에 `.env`나 서명 키가 없으면 `.github/workflows/macos-release.yml`(수동 실행)로 같은 `release.sh`를
+> Actions 에서 돌린다: 태그 push 후 `gh workflow run macos-release.yml -f tag=vX.Y.Z` → Draft 생성(본문은
+> RELEASE_NOTES 해당 항목) → 확인 후 `gh release edit vX.Y.Z --draft=false`. 빌드 job 은 읽기 권한,
+> 업로드 job 만 쓰기 권한. public repo 라 표준 러너는 과금되지 않는다(2026-11-13 추가, v0.9.10 첫 사용).
 > Windows(nsis) 는 macOS 에서 빌드되지 않아 `.github/workflows/windows-release.yml` 로 만든다(수동 실행, Windows 전용).
 > Draft Release 가 올라간 뒤 `publish=false` 로 빌드, 서명 검증, latest.json 패치를 확인하고 `publish=true` 로 exe, sig 업로드와
 > latest.json 교체를 한다. public repo 라 과금되지 않는다. 쓰는 Secret 5종은 docs/GITHUB_SECRETS.md 참고.
