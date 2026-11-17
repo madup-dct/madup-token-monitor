@@ -246,6 +246,21 @@ mod tests {
     }
 
     #[test]
+    fn test_calc_cost_gpt_6_2_astra_and_sol_standard_and_long_context() {
+        // https://developers.openai.com/api/docs/models/gpt-6.2-astra — $8 / cached $0.40 / $40.
+        // https://developers.openai.com/api/docs/models/gpt-6.2-sol — $2 / cached $0.10 / $10.
+        // 272K 초과 요청은 입력·캐시 2배, 출력 1.5배. 이전 세대 키(gpt-6-astra)로 매칭되지 않아야 한다.
+        let astra = calc_cost_usd("gpt-6.2-astra", 60_000, 1_000, 40_000, 0, 0);
+        assert!((astra - 0.536).abs() < 1e-9, "astra={astra}");
+        let astra_long = calc_cost_usd("gpt-6.2-astra", 172_001, 1_000, 100_000, 0, 0);
+        assert!((astra_long - 2.892016).abs() < 1e-9, "astra_long={astra_long}");
+        let sol = calc_cost_usd("gpt-6.2-sol", 60_000, 1_000, 40_000, 0, 0);
+        assert!((sol - 0.134).abs() < 1e-9, "sol={sol}");
+        let sol_long = calc_cost_usd("gpt-6.2-sol", 172_001, 1_000, 100_000, 0, 0);
+        assert!((sol_long - 0.723004).abs() < 1e-9, "sol_long={sol_long}");
+    }
+
+    #[test]
     fn test_calc_cost_gpt_6_astra_large_output_does_not_trigger_long_context() {
         let cost = calc_cost_usd("gpt-6-astra", 100_000, 200_000, 0, 0, 0);
         assert!((cost - 11.0).abs() < 1e-9, "cost={cost}");

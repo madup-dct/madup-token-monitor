@@ -13,9 +13,9 @@
 
 ## 최근 패치
 
-**v0.9.10 (2026-11-13): Codex GPT-6.1 Sol, GPT-6 Luna 비용 누락 수정**
+**v0.9.11 (2026-11-18): Codex GPT-6.2 Astra, GPT-6.2 Sol 비용 누락 수정**
 
-- 단가표에 없어 $0으로 집계되던 `gpt-6.1-sol`, `gpt-6-luna` 사용량에 공식 Standard API 단가 적용.
+- 단가표에 없어 $0으로 집계되던 `gpt-6.2-astra`, `gpt-6.2-sol` 사용량에 공식 Standard API 단가 적용.
 - 업데이트 후 첫 실행 때 보존 기간 안의 기존 기록 비용을 다시 계산하고 사내 집계에 다시 업로드.
 
 전체 이력은 [`docs/RELEASE_NOTES.md`](docs/RELEASE_NOTES.md) 참고.

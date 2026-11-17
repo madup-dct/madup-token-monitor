@@ -3,6 +3,17 @@
 버전별 패치 내역. 최신 버전이 위. README 의 "최근 패치" 섹션은 이 파일의 맨 위 항목만 요약한다.
 설치 파일은 [GitHub Releases](https://github.com/madup-dct/madup-token-monitor/releases) 참고.
 
+## v0.9.11 (2026-11-18)
+
+### 수정 사항
+
+- Codex 모델 `gpt-6.2-astra`와 `gpt-6.2-sol`이 단가표에 없어 비용이 $0으로 집계되던 문제를 수정했습니다. Codex config 기본 모델이 `gpt-6.2-astra`로 바뀐 뒤의 사용량이 해당됩니다.
+  - `gpt-6.2-astra`: 1M 토큰당 입력 $8, 캐시 읽기 $0.40, 출력 $40. 요청 입력이 272K를 넘으면 입력과 캐시 2배, 출력 1.5배 ([공식](https://developers.openai.com/api/docs/models/gpt-6.2-astra)).
+  - `gpt-6.2-sol`: 1M 토큰당 입력 $2, 캐시 읽기 $0.10, 출력 $10. 긴 입력 할증 규칙은 위와 같습니다 ([공식](https://developers.openai.com/api/docs/models/gpt-6.2-sol)).
+- `gpt-6-astra` 단가($10 / $50)는 그대로 둡니다. 6.2 Astra는 별도 키로 계산되어 이전 세대 단가가 적용되지 않습니다.
+- 업데이트 후 첫 실행 때 보존 기간(이번 달과 직전 2개월) 안의 기록 비용이 새 단가표로 다시 계산되고, 이어서 사내 집계로 다시 업로드됩니다. 원격 시간별 집계는 최근 30일만 다시 올라갑니다.
+- 금액은 Standard API 단가로 환산한 값이며 ChatGPT 구독 요금과는 다릅니다.
+
 ## v0.9.10 (2026-11-13)
 
 ### 수정 사항
